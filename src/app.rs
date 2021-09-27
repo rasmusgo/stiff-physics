@@ -149,7 +149,8 @@ impl epi::App for StiffPhysicsApp {
                 let diff = p1 - p2;
                 let norm2 = diff.x * diff.x + diff.y * diff.y;
                 let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
-                let stroke = Stroke::new(line_width, if stress >= 0.5 { Color32::RED } else { Color32::GREEN });
+                let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
+                let stroke = Stroke::new(line_width, line_color);
                 painter.line_segment([
                     c + p1 * r,
                     c + p2 * r,

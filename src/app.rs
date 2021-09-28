@@ -132,9 +132,11 @@ pub struct StiffPhysicsApp {
     point_mass: f32,
     points: [Vec2; NUM_POINTS],
     lengths: [f32; NUM_SPRINGS],
+    mat_a: DMatrix::<f64>,
     simulation_state: DVector::<f64>,
     exp_a_sim_step: DMatrix::<f64>,
     exp_a_audio_step: DMatrix::<f64>,
+    enable_simulation: bool,
 }
 
 impl Default for StiffPhysicsApp {
@@ -154,9 +156,11 @@ impl Default for StiffPhysicsApp {
                 0.5,
                 0.5,
             ],
+            mat_a: DMatrix::<f64>::zeros(N, N),
             simulation_state: DVector::<f64>::zeros(N),
             exp_a_sim_step: DMatrix::<f64>::zeros(N, N),
             exp_a_audio_step: DMatrix::<f64>::zeros(N, N),
+            enable_simulation: false,
         }
     }
 }
@@ -192,7 +196,7 @@ impl epi::App for StiffPhysicsApp {
     /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
         let Self { label, spring_constant, damping, point_mass, points, lengths,
-            simulation_state, exp_a_sim_step, exp_a_audio_step } = self;
+            mat_a, simulation_state, exp_a_sim_step, exp_a_audio_step, enable_simulation } = self;
 
         // Examples of how to create different panels and windows.
         // Pick whichever suits you.
@@ -209,6 +213,11 @@ impl epi::App for StiffPhysicsApp {
         //         });
         //     });
         // });
+
+        if *enable_simulation {
+            // Advance simulation
+            *simulation_state = &*exp_a_sim_step * &*simulation_state;
+        }
 
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
             ui.heading("Side Panel");
@@ -234,13 +243,14 @@ impl epi::App for StiffPhysicsApp {
 
             if ui.button("Simulate").clicked() {
                 let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
-                let (mat_a, y0) = create_diff_eq_system(points, &point_masses, lengths, *spring_constant, *damping);
+                let (a, y0) = create_diff_eq_system(points, &point_masses, lengths, *spring_constant, *damping);
+                *mat_a = a;
                 *simulation_state = y0;
-                // *exp_a_sim_step = DMatrix::<f64>::zeros((N, N));
-                // *exp_a_audio_step = DMatrix::<f64>::zeros((N, N));
-
                 *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
-                *exp_a_audio_step = (mat_a / 44100.0).exp();
+                *exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
+                *enable_simulation = true;
+                // println!("{:?}", mat_a);
+                // println!("{:?}", &*mat_a * &*simulation_state);
             }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
@@ -278,6 +288,25 @@ impl epi::App for StiffPhysicsApp {
                 }
                 if let Some(i) = best_point {
                     points[i] = (pos - c) / r;
+                }
+            }
+            if *enable_simulation {
+                for (i, &mut length) in lengths.into_iter().enumerate() {
+                    let p1 = vec2(simulation_state[i * STRIDE] as f32, simulation_state[i * STRIDE + 1] as f32);
+                    let p2 = vec2(simulation_state[(i + 1) * STRIDE] as f32, simulation_state[(i + 1) * STRIDE + 1] as f32);
+                    let diff = p1 - p2;
+                    let norm2 = diff.x * diff.x + diff.y * diff.y;
+                    let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
+                    let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
+                    let stroke = Stroke::new(line_width, line_color);
+                    painter.line_segment([
+                        c + p1 * r,
+                        c + p2 * r,
+                        ], stroke);
+                }
+                for i in 0..NUM_POINTS {
+                    let p = vec2(simulation_state[i * STRIDE] as f32, simulation_state[i * STRIDE + 1] as f32);
+                    painter.circle_filled(c + p * r, circle_radius, color);
                 }
             }
             for (i, &mut length) in lengths.into_iter().enumerate() {

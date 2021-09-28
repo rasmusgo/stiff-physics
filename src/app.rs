@@ -1,4 +1,125 @@
+// extern crate blas;
+// extern crate openblas_src;
+use hyperdual;
+
 use eframe::{egui::{self, Color32, Sense, Stroke, Vec2, vec2}, epi};
+use hyperdual::{Hyperdual, Float};
+
+const NUM_POINTS: usize = 3;
+const NUM_SPRINGS: usize = NUM_POINTS - 1;
+const D: usize = 2;
+const STRIDE: usize = D * 2;
+const N: usize = NUM_POINTS * STRIDE + 1;
+
+fn spring_force(
+    p1_px: Hyperdual<f64, 8>,
+    p1_py: Hyperdual<f64, 8>,
+    p1_vx: Hyperdual<f64, 8>,
+    p1_vy: Hyperdual<f64, 8>,
+    p2_px: Hyperdual<f64, 8>,
+    p2_py: Hyperdual<f64, 8>,
+    p2_vx: Hyperdual<f64, 8>,
+    p2_vy: Hyperdual<f64, 8>,
+    relaxed_length: f64,
+    k: f64, // Spring constant
+    d: f64) // Damping constant
+    -> [Hyperdual<f64, 8>; D]
+{
+    let dx = p2_px - p1_px;
+    let dy = p2_py - p1_py;
+    let dvx = p2_vx - p1_vx;
+    let dvy = p2_vy - p1_vy;
+    let spring_length = (dx*dx + dy*dy).sqrt();
+    let spring_dirx = dx / spring_length;
+    let spring_diry = dy / spring_length;
+    let force_magnitude: Hyperdual<f64, 8> = Hyperdual::from_real(k) * (spring_length - Hyperdual::from_real(relaxed_length)) + Hyperdual::from_real(d) * (spring_dirx * dvx + spring_diry * dvy);
+
+    let force_x = spring_dirx * force_magnitude;
+    let force_y = spring_diry * force_magnitude;
+
+    return [force_x, force_y];
+}
+
+fn create_diff_eq_system(points: &[Vec2; NUM_POINTS], point_masses: &[f32; NUM_POINTS], lengths: &[f32; NUM_SPRINGS], k: f32, d: f32)
+    -> (ndarray::Array2<f64>, ndarray::Array1<f64>)
+{
+    // Initial state
+    let y0 = ndarray::Array1::from_vec(vec![
+        points[0].x.into(),
+        points[0].y.into(),
+        0.0, // vx
+        0.0, // vy
+        points[1].x.into(),
+        points[1].y.into(),
+        0.0, // vx
+        0.0, // vy
+        points[2].x.into(),
+        points[2].y.into(),
+        0.0, // vx
+        0.0, // vy
+        1.0, // For transformation to homogenous system.
+    ]);
+
+    // Dual numbers for automatic differentiation of springs. (Spatial derivatives, not time derivatives).
+    let mut p1_px: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_py: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_vx: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_vy: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p2_px: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+    let mut p2_py: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let mut p2_vx: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    let mut p2_vy: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+
+    // Construct A matrix for y' = Ay. (Time derivative of state vector).
+    let mut mat_a = ndarray::Array2::zeros([N, N]);
+
+    // Equations for variable substitutions
+    for i in 0..NUM_POINTS {
+        let start_index = i * STRIDE;
+        for j in 0..D {
+            // "velocity is velocity"
+            mat_a[[start_index + j, start_index + STRIDE + j]] = 1.0;
+        }
+    }
+
+    // Equations for spring forces
+    for (i, &relaxed_length) in lengths.iter().enumerate() {
+        let p1_start_index = i * STRIDE;
+        let p2_start_index = (i + 1) * STRIDE;
+
+        // Set parameters to spring function.
+        p1_px[0] = y0[p1_start_index];
+        p1_py[0] = y0[p1_start_index + 1];
+        p1_vx[0] = y0[p1_start_index + 2];
+        p1_vy[0] = y0[p1_start_index + 3];
+        p2_px[0] = y0[p2_start_index];
+        p2_py[0] = y0[p2_start_index + 1];
+        p2_vx[0] = y0[p2_start_index + 2];
+        p2_vy[0] = y0[p2_start_index + 3];
+
+        let p1_mass: f64 = point_masses[i].into();
+        let p2_mass: f64 = point_masses[i + 1].into();
+
+        let force = spring_force(p1_px, p1_py, p1_vx, p1_vy, p2_px, p2_py, p2_vx, p2_vy, relaxed_length.into(), k.into(), d.into());
+
+        for j in 0..D {
+            let mut constant_term = force[j][0];
+            for k in 0..STRIDE {
+                // Acceleration based on positions
+                mat_a[[p1_start_index + D + j, p1_start_index + k]] -= force[j][1 + k] / p1_mass; // p1 acc from pos and vel of p1.
+                mat_a[[p1_start_index + D + j, p2_start_index + k]] -= force[j][1 + STRIDE + k] / p1_mass;  // p1 acc from pos and vel of p2.
+                mat_a[[p2_start_index + D + j, p1_start_index + k]] += force[j][1 + k] / p2_mass; // p2 acc from pos and vel of p1.
+                mat_a[[p2_start_index + D + j, p2_start_index + k]] += force[j][1 + STRIDE + k] / p2_mass;  // p2 acc from pos and vel of p2.
+                constant_term -= force[j][1 + k] * y0[p1_start_index + k] + force[j][1 + STRIDE + k] * y0[p2_start_index + k]; // Offset for linearization around y0.
+            }
+            // Constant acceleration term.
+            mat_a[[p1_start_index + D + j, N - 1]] -= constant_term / p1_mass;
+            mat_a[[p2_start_index + D + j, N - 1]] += constant_term / p2_mass;
+        }
+    }
+
+    return (mat_a, y0);
+}
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[cfg_attr(feature = "persistence", derive(serde::Deserialize, serde::Serialize))]
@@ -12,8 +133,11 @@ pub struct StiffPhysicsApp {
     spring_constant: f32,
     damping: f32,
     point_mass: f32,
-    points: [Vec2; 3],
-    lengths: [f32; 2],
+    points: [Vec2; NUM_POINTS],
+    lengths: [f32; NUM_SPRINGS],
+    simulation_state: ndarray::Array1<f64>,
+    exp_a_sim_step: ndarray::Array2::<f64>,
+    exp_a_audio_step: ndarray::Array2::<f64>,
 }
 
 impl Default for StiffPhysicsApp {
@@ -32,7 +156,10 @@ impl Default for StiffPhysicsApp {
             lengths: [
                 0.5,
                 0.5,
-            ]
+            ],
+            simulation_state: ndarray::Array1::<f64>::zeros(N),
+            exp_a_sim_step: ndarray::Array2::<f64>::zeros((N, N)),
+            exp_a_audio_step: ndarray::Array2::<f64>::zeros((N, N)),
         }
     }
 }
@@ -67,7 +194,8 @@ impl epi::App for StiffPhysicsApp {
     /// Called each time the UI needs repainting, which may be many times per second.
     /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
-        let Self { label, spring_constant, damping, point_mass, points, lengths } = self;
+        let Self { label, spring_constant, damping, point_mass, points, lengths,
+            simulation_state, exp_a_sim_step, exp_a_audio_step } = self;
 
         // Examples of how to create different panels and windows.
         // Pick whichever suits you.
@@ -96,6 +224,7 @@ impl epi::App for StiffPhysicsApp {
             ui.add(egui::Slider::new(spring_constant, 0.0..=1000.0).text("spring_constant"));
             ui.add(egui::Slider::new(damping, 0.0..=1000.0).text("damping"));
             ui.add(egui::Slider::new(point_mass, 0.01..=10.0).text("point_mass"));
+
             if ui.button("Store as relaxed").clicked() {
                 for (i, length) in lengths.into_iter().enumerate() {
                     let p1 = points[i];
@@ -104,6 +233,19 @@ impl epi::App for StiffPhysicsApp {
                     let norm2 = diff.x * diff.x + diff.y * diff.y;
                     *length = norm2.sqrt();
                 }
+            }
+
+            if ui.button("Simulate").clicked() {
+                let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
+                let (_mat_a, y0) = create_diff_eq_system(points, &point_masses, lengths, *spring_constant, *damping);
+                *simulation_state = y0;
+                *exp_a_sim_step = ndarray::Array2::<f64>::zeros((N, N));
+                *exp_a_audio_step = ndarray::Array2::<f64>::zeros((N, N));
+
+                // let mat_a_sim_step = mat_a.clone() * 0.01;
+                // let mat_a_audio_step = mat_a.clone() / 44100.0;
+                // crate::expm(&mat_a_sim_step, &mut exp_A_sim_step);
+                // crate::expm(&mat_a_audio_step, &mut exp_A_audio_step);
             }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {

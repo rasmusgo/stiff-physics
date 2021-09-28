@@ -31,8 +31,8 @@ fn spring_force(
     let spring_diry = dy / spring_length;
     let force_magnitude: Hyperdual<f64, 9> = Hyperdual::from_real(k) * (spring_length - Hyperdual::from_real(relaxed_length)) + Hyperdual::from_real(d) * (spring_dirx * dvx + spring_diry * dvy);
 
-    let force_x = spring_dirx * force_magnitude;
-    let force_y = spring_diry * force_magnitude;
+    let force_x = spring_dirx * -force_magnitude;
+    let force_y = spring_diry * -force_magnitude;
 
     return [force_x, force_y];
 }

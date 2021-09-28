@@ -1,9 +1,6 @@
-// extern crate blas;
-// extern crate openblas_src;
-use hyperdual;
-
 use eframe::{egui::{self, Color32, Sense, Stroke, Vec2, vec2}, epi};
-use hyperdual::{Hyperdual, Float};
+use hyperdual::{Float, Hyperdual};
+use nalgebra::{self, DMatrix, DVector};
 
 const NUM_POINTS: usize = 3;
 const NUM_SPRINGS: usize = NUM_POINTS - 1;
@@ -12,18 +9,18 @@ const STRIDE: usize = D * 2;
 const N: usize = NUM_POINTS * STRIDE + 1;
 
 fn spring_force(
-    p1_px: Hyperdual<f64, 8>,
-    p1_py: Hyperdual<f64, 8>,
-    p1_vx: Hyperdual<f64, 8>,
-    p1_vy: Hyperdual<f64, 8>,
-    p2_px: Hyperdual<f64, 8>,
-    p2_py: Hyperdual<f64, 8>,
-    p2_vx: Hyperdual<f64, 8>,
-    p2_vy: Hyperdual<f64, 8>,
+    p1_px: Hyperdual<f64, 9>,
+    p1_py: Hyperdual<f64, 9>,
+    p1_vx: Hyperdual<f64, 9>,
+    p1_vy: Hyperdual<f64, 9>,
+    p2_px: Hyperdual<f64, 9>,
+    p2_py: Hyperdual<f64, 9>,
+    p2_vx: Hyperdual<f64, 9>,
+    p2_vy: Hyperdual<f64, 9>,
     relaxed_length: f64,
     k: f64, // Spring constant
     d: f64) // Damping constant
-    -> [Hyperdual<f64, 8>; D]
+    -> [Hyperdual<f64, 9>; D]
 {
     let dx = p2_px - p1_px;
     let dy = p2_py - p1_py;
@@ -32,7 +29,7 @@ fn spring_force(
     let spring_length = (dx*dx + dy*dy).sqrt();
     let spring_dirx = dx / spring_length;
     let spring_diry = dy / spring_length;
-    let force_magnitude: Hyperdual<f64, 8> = Hyperdual::from_real(k) * (spring_length - Hyperdual::from_real(relaxed_length)) + Hyperdual::from_real(d) * (spring_dirx * dvx + spring_diry * dvy);
+    let force_magnitude: Hyperdual<f64, 9> = Hyperdual::from_real(k) * (spring_length - Hyperdual::from_real(relaxed_length)) + Hyperdual::from_real(d) * (spring_dirx * dvx + spring_diry * dvy);
 
     let force_x = spring_dirx * force_magnitude;
     let force_y = spring_diry * force_magnitude;
@@ -41,10 +38,10 @@ fn spring_force(
 }
 
 fn create_diff_eq_system(points: &[Vec2; NUM_POINTS], point_masses: &[f32; NUM_POINTS], lengths: &[f32; NUM_SPRINGS], k: f32, d: f32)
-    -> (ndarray::Array2<f64>, ndarray::Array1<f64>)
+    -> (DMatrix<f64>, DVector<f64>)
 {
     // Initial state
-    let y0 = ndarray::Array1::from_vec(vec![
+    let y0 = DVector::<f64>::from_vec(vec![
         points[0].x.into(),
         points[0].y.into(),
         0.0, // vx
@@ -61,24 +58,24 @@ fn create_diff_eq_system(points: &[Vec2; NUM_POINTS], point_masses: &[f32; NUM_P
     ]);
 
     // Dual numbers for automatic differentiation of springs. (Spatial derivatives, not time derivatives).
-    let mut p1_px: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_py: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_vx: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_vy: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p2_px: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
-    let mut p2_py: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-    let mut p2_vx: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
-    let mut p2_vy: Hyperdual<f64, 8> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+    let mut p1_px: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_py: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_vx: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_vy: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p2_px: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+    let mut p2_py: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let mut p2_vx: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    let mut p2_vy: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
 
     // Construct A matrix for y' = Ay. (Time derivative of state vector).
-    let mut mat_a = ndarray::Array2::zeros([N, N]);
+    let mut mat_a = DMatrix::<f64>::zeros(N, N);
 
     // Equations for variable substitutions
     for i in 0..NUM_POINTS {
         let start_index = i * STRIDE;
         for j in 0..D {
             // "velocity is velocity"
-            mat_a[[start_index + j, start_index + STRIDE + j]] = 1.0;
+            mat_a[(start_index + j, start_index + D + j)] = 1.0;
         }
     }
 
@@ -106,15 +103,15 @@ fn create_diff_eq_system(points: &[Vec2; NUM_POINTS], point_masses: &[f32; NUM_P
             let mut constant_term = force[j][0];
             for k in 0..STRIDE {
                 // Acceleration based on positions
-                mat_a[[p1_start_index + D + j, p1_start_index + k]] -= force[j][1 + k] / p1_mass; // p1 acc from pos and vel of p1.
-                mat_a[[p1_start_index + D + j, p2_start_index + k]] -= force[j][1 + STRIDE + k] / p1_mass;  // p1 acc from pos and vel of p2.
-                mat_a[[p2_start_index + D + j, p1_start_index + k]] += force[j][1 + k] / p2_mass; // p2 acc from pos and vel of p1.
-                mat_a[[p2_start_index + D + j, p2_start_index + k]] += force[j][1 + STRIDE + k] / p2_mass;  // p2 acc from pos and vel of p2.
+                mat_a[(p1_start_index + D + j, p1_start_index + k)] -= force[j][1 + k] / p1_mass; // p1 acc from pos and vel of p1.
+                mat_a[(p1_start_index + D + j, p2_start_index + k)] -= force[j][1 + STRIDE + k] / p1_mass;  // p1 acc from pos and vel of p2.
+                mat_a[(p2_start_index + D + j, p1_start_index + k)] += force[j][1 + k] / p2_mass; // p2 acc from pos and vel of p1.
+                mat_a[(p2_start_index + D + j, p2_start_index + k)] += force[j][1 + STRIDE + k] / p2_mass;  // p2 acc from pos and vel of p2.
                 constant_term -= force[j][1 + k] * y0[p1_start_index + k] + force[j][1 + STRIDE + k] * y0[p2_start_index + k]; // Offset for linearization around y0.
             }
             // Constant acceleration term.
-            mat_a[[p1_start_index + D + j, N - 1]] -= constant_term / p1_mass;
-            mat_a[[p2_start_index + D + j, N - 1]] += constant_term / p2_mass;
+            mat_a[(p1_start_index + D + j, N - 1)] -= constant_term / p1_mass;
+            mat_a[(p2_start_index + D + j, N - 1)] += constant_term / p2_mass;
         }
     }
 
@@ -135,9 +132,9 @@ pub struct StiffPhysicsApp {
     point_mass: f32,
     points: [Vec2; NUM_POINTS],
     lengths: [f32; NUM_SPRINGS],
-    simulation_state: ndarray::Array1<f64>,
-    exp_a_sim_step: ndarray::Array2::<f64>,
-    exp_a_audio_step: ndarray::Array2::<f64>,
+    simulation_state: DVector::<f64>,
+    exp_a_sim_step: DMatrix::<f64>,
+    exp_a_audio_step: DMatrix::<f64>,
 }
 
 impl Default for StiffPhysicsApp {
@@ -157,9 +154,9 @@ impl Default for StiffPhysicsApp {
                 0.5,
                 0.5,
             ],
-            simulation_state: ndarray::Array1::<f64>::zeros(N),
-            exp_a_sim_step: ndarray::Array2::<f64>::zeros((N, N)),
-            exp_a_audio_step: ndarray::Array2::<f64>::zeros((N, N)),
+            simulation_state: DVector::<f64>::zeros(N),
+            exp_a_sim_step: DMatrix::<f64>::zeros(N, N),
+            exp_a_audio_step: DMatrix::<f64>::zeros(N, N),
         }
     }
 }
@@ -237,15 +234,13 @@ impl epi::App for StiffPhysicsApp {
 
             if ui.button("Simulate").clicked() {
                 let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
-                let (_mat_a, y0) = create_diff_eq_system(points, &point_masses, lengths, *spring_constant, *damping);
+                let (mat_a, y0) = create_diff_eq_system(points, &point_masses, lengths, *spring_constant, *damping);
                 *simulation_state = y0;
-                *exp_a_sim_step = ndarray::Array2::<f64>::zeros((N, N));
-                *exp_a_audio_step = ndarray::Array2::<f64>::zeros((N, N));
+                // *exp_a_sim_step = DMatrix::<f64>::zeros((N, N));
+                // *exp_a_audio_step = DMatrix::<f64>::zeros((N, N));
 
-                // let mat_a_sim_step = mat_a.clone() * 0.01;
-                // let mat_a_audio_step = mat_a.clone() / 44100.0;
-                // crate::expm(&mat_a_sim_step, &mut exp_A_sim_step);
-                // crate::expm(&mat_a_audio_step, &mut exp_A_audio_step);
+                *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
+                *exp_a_audio_step = (mat_a / 44100.0).exp();
             }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {

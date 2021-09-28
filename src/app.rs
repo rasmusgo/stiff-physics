@@ -163,7 +163,7 @@ impl Default for StiffPhysicsApp {
 
 impl epi::App for StiffPhysicsApp {
     fn name(&self) -> &str {
-        "egui template"
+        "Stiff Physics"
     }
 
     /// Called once before the first frame.

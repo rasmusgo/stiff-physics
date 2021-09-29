@@ -5,6 +5,29 @@ use eframe::{
 use hyperdual::{Float, Hyperdual};
 use nalgebra::{self, DMatrix, DVector};
 
+trait OneHot {
+    type H;
+    fn from_one_hot(index: usize) -> Self::H;
+}
+
+impl<T: hyperdual::Zero + hyperdual::One + Copy + nalgebra::Scalar, const N: usize> OneHot
+    for Hyperdual<T, N>
+{
+    type H = Hyperdual<T, N>;
+    /// Create a new dual number from a real number and set the real value or a derivative to one.
+    ///
+    /// All other parts are set to zero.
+    #[inline]
+    fn from_one_hot(index: usize) -> Hyperdual<T, N>
+    where
+        T: hyperdual::Zero,
+    {
+        let mut dual = Hyperdual::<T, N>::from_real(T::zero());
+        dual[index] = T::one();
+        dual
+    }
+}
+
 const NUM_POINTS: usize = 3;
 const NUM_SPRINGS: usize = NUM_POINTS - 1;
 const D: usize = 2;
@@ -66,22 +89,14 @@ fn create_diff_eq_system(
     ]);
 
     // Dual numbers for automatic differentiation of springs. (Spatial derivatives, not time derivatives).
-    let mut p1_px: Hyperdual<f64, 9> =
-        Hyperdual::from_slice(&[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_py: Hyperdual<f64, 9> =
-        Hyperdual::from_slice(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_vx: Hyperdual<f64, 9> =
-        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_vy: Hyperdual<f64, 9> =
-        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p2_px: Hyperdual<f64, 9> =
-        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
-    let mut p2_py: Hyperdual<f64, 9> =
-        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-    let mut p2_vx: Hyperdual<f64, 9> =
-        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
-    let mut p2_vy: Hyperdual<f64, 9> =
-        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+    let mut p1_px: Hyperdual<f64, 9> = Hyperdual::from_one_hot(1);
+    let mut p1_py: Hyperdual<f64, 9> = Hyperdual::from_one_hot(2);
+    let mut p1_vx: Hyperdual<f64, 9> = Hyperdual::from_one_hot(3);
+    let mut p1_vy: Hyperdual<f64, 9> = Hyperdual::from_one_hot(4);
+    let mut p2_px: Hyperdual<f64, 9> = Hyperdual::from_one_hot(5);
+    let mut p2_py: Hyperdual<f64, 9> = Hyperdual::from_one_hot(6);
+    let mut p2_vx: Hyperdual<f64, 9> = Hyperdual::from_one_hot(7);
+    let mut p2_vy: Hyperdual<f64, 9> = Hyperdual::from_one_hot(8);
 
     // Construct A matrix for y' = Ay. (Time derivative of state vector).
     let mut mat_a = DMatrix::<f64>::zeros(N, N);

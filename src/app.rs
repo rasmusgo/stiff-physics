@@ -5,6 +5,8 @@ use eframe::{
 use hyperdual::{Float, Hyperdual};
 use nalgebra::{self, DMatrix, DVector};
 
+use crate::play_audio_buffer;
+
 trait OneHot {
     type H;
     fn from_one_hot(index: usize) -> Self::H;
@@ -191,8 +193,8 @@ impl Default for StiffPhysicsApp {
             // Example stuff:
             label: "Hello World!".to_owned(),
             spring_constant: 1000.0,
-            damping: 1.0,
-            point_mass: 0.01,
+            damping: 0.1,
+            point_mass: 0.001,
             points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
             lengths: [0.5, 0.5],
             mat_a: DMatrix::<f64>::zeros(N, N),
@@ -307,6 +309,26 @@ impl epi::App for StiffPhysicsApp {
                 *enable_simulation = true;
                 // println!("{:?}", mat_a);
                 // println!("{:?}", &*mat_a * &*simulation_state);
+
+                // Generate audio
+                let mut data = Vec::new();
+                let mut y = simulation_state.clone();
+                let mut max_value: f32 = 0.0;
+                for _i in 0..44100 * 3 {
+                    let y_next = &*exp_a_audio_step * &y;
+                    let value = (&y_next[D] - &y[D]) as f32;
+                    max_value = f32::max(max_value, value.abs());
+                    data.push(value);
+                    y = y_next;
+                }
+                // Normalize volume
+                if max_value > 0.0 {
+                    for value in data.iter_mut() {
+                        *value /= max_value;
+                    }
+                }
+                // Send data to audio player (javascript when running via wasm)
+                play_audio_buffer(data);
             }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {

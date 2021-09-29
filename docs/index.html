@@ -83,6 +83,27 @@
             // This call installs a bunch of callbacks and then returns.
             wasm_bindgen.start("the_canvas_id");
         }
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+
+        /**
+         * @param {Array.<number>} [data]
+         */
+        function play_audio_buffer(data) {
+            const buffer = audioCtx.createBuffer(1, data.length, 44100);
+            let channelData = buffer.getChannelData(0);
+
+            // fill the buffer with noise
+            for (let i = 0; i < data.length; i++) {
+                channelData[i] = data[i];
+            }
+
+            let source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+
+            source.connect(audioCtx.destination);
+            source.start();
+        }
     </script>
 </body>
 

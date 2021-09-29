@@ -21,3 +21,15 @@ pub fn start(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
     let app = StiffPhysicsApp::default();
     eframe::start_web(canvas_id, Box::new(app))
 }
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    pub fn play_audio_buffer(data: Vec<f32>);
+}
+
+// ----------------------------------------------------------------------------
+// When NOT compiling for web:
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn play_audio_buffer(data: Vec<f32>) {}

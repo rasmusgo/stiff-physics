@@ -1,4 +1,7 @@
-use eframe::{egui::{self, Color32, Sense, Stroke, Vec2, vec2}, epi};
+use eframe::{
+    egui::{self, vec2, Color32, Sense, Stroke, Vec2},
+    epi,
+};
 use hyperdual::{Float, Hyperdual};
 use nalgebra::{self, DMatrix, DVector};
 
@@ -19,17 +22,18 @@ fn spring_force(
     p2_vy: Hyperdual<f64, 9>,
     relaxed_length: f64,
     k: f64, // Spring constant
-    d: f64) // Damping constant
-    -> [Hyperdual<f64, 9>; D]
-{
+    d: f64,
+) -> [Hyperdual<f64, 9>; D] {
     let dx = p2_px - p1_px;
     let dy = p2_py - p1_py;
     let dvx = p2_vx - p1_vx;
     let dvy = p2_vy - p1_vy;
-    let spring_length = (dx*dx + dy*dy).sqrt();
+    let spring_length = (dx * dx + dy * dy).sqrt();
     let spring_dirx = dx / spring_length;
     let spring_diry = dy / spring_length;
-    let force_magnitude: Hyperdual<f64, 9> = Hyperdual::from_real(k) * (spring_length - Hyperdual::from_real(relaxed_length)) + Hyperdual::from_real(d) * (spring_dirx * dvx + spring_diry * dvy);
+    let force_magnitude: Hyperdual<f64, 9> = Hyperdual::from_real(k)
+        * (spring_length - Hyperdual::from_real(relaxed_length))
+        + Hyperdual::from_real(d) * (spring_dirx * dvx + spring_diry * dvy);
 
     let force_x = spring_dirx * -force_magnitude;
     let force_y = spring_diry * -force_magnitude;
@@ -37,9 +41,13 @@ fn spring_force(
     return [force_x, force_y];
 }
 
-fn create_diff_eq_system(points: &[Vec2; NUM_POINTS], point_masses: &[f32; NUM_POINTS], lengths: &[f32; NUM_SPRINGS], k: f32, d: f32)
-    -> (DMatrix<f64>, DVector<f64>)
-{
+fn create_diff_eq_system(
+    points: &[Vec2; NUM_POINTS],
+    point_masses: &[f32; NUM_POINTS],
+    lengths: &[f32; NUM_SPRINGS],
+    k: f32,
+    d: f32,
+) -> (DMatrix<f64>, DVector<f64>) {
     // Initial state
     let y0 = DVector::<f64>::from_vec(vec![
         points[0].x.into(),
@@ -58,14 +66,22 @@ fn create_diff_eq_system(points: &[Vec2; NUM_POINTS], point_masses: &[f32; NUM_P
     ]);
 
     // Dual numbers for automatic differentiation of springs. (Spatial derivatives, not time derivatives).
-    let mut p1_px: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_py: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_vx: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p1_vy: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
-    let mut p2_px: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
-    let mut p2_py: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-    let mut p2_vx: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
-    let mut p2_vy: Hyperdual<f64, 9> = Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+    let mut p1_px: Hyperdual<f64, 9> =
+        Hyperdual::from_slice(&[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_py: Hyperdual<f64, 9> =
+        Hyperdual::from_slice(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_vx: Hyperdual<f64, 9> =
+        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p1_vy: Hyperdual<f64, 9> =
+        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+    let mut p2_px: Hyperdual<f64, 9> =
+        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
+    let mut p2_py: Hyperdual<f64, 9> =
+        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let mut p2_vx: Hyperdual<f64, 9> =
+        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    let mut p2_vy: Hyperdual<f64, 9> =
+        Hyperdual::from_slice(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
 
     // Construct A matrix for y' = Ay. (Time derivative of state vector).
     let mut mat_a = DMatrix::<f64>::zeros(N, N);
@@ -81,37 +97,52 @@ fn create_diff_eq_system(points: &[Vec2; NUM_POINTS], point_masses: &[f32; NUM_P
 
     // Equations for spring forces
     for (i, &relaxed_length) in lengths.iter().enumerate() {
-        let p1_start_index = i * STRIDE;
-        let p2_start_index = (i + 1) * STRIDE;
+        let p1_loc = i * STRIDE;
+        let p2_loc = (i + 1) * STRIDE;
 
         // Set parameters to spring function.
-        p1_px[0] = y0[p1_start_index];
-        p1_py[0] = y0[p1_start_index + 1];
-        p1_vx[0] = y0[p1_start_index + 2];
-        p1_vy[0] = y0[p1_start_index + 3];
-        p2_px[0] = y0[p2_start_index];
-        p2_py[0] = y0[p2_start_index + 1];
-        p2_vx[0] = y0[p2_start_index + 2];
-        p2_vy[0] = y0[p2_start_index + 3];
+        p1_px[0] = y0[p1_loc];
+        p1_py[0] = y0[p1_loc + 1];
+        p1_vx[0] = y0[p1_loc + 2];
+        p1_vy[0] = y0[p1_loc + 3];
+        p2_px[0] = y0[p2_loc];
+        p2_py[0] = y0[p2_loc + 1];
+        p2_vx[0] = y0[p2_loc + 2];
+        p2_vy[0] = y0[p2_loc + 3];
 
         let p1_mass: f64 = point_masses[i].into();
         let p2_mass: f64 = point_masses[i + 1].into();
 
-        let force = spring_force(p1_px, p1_py, p1_vx, p1_vy, p2_px, p2_py, p2_vx, p2_vy, relaxed_length.into(), k.into(), d.into());
+        let force = spring_force(
+            p1_px,
+            p1_py,
+            p1_vx,
+            p1_vy,
+            p2_px,
+            p2_py,
+            p2_vx,
+            p2_vy,
+            relaxed_length.into(),
+            k.into(),
+            d.into(),
+        );
 
         for j in 0..D {
             let mut constant_term = force[j][0];
             for k in 0..STRIDE {
-                // Acceleration based on positions
-                mat_a[(p1_start_index + D + j, p1_start_index + k)] -= force[j][1 + k] / p1_mass; // p1 acc from pos and vel of p1.
-                mat_a[(p1_start_index + D + j, p2_start_index + k)] -= force[j][1 + STRIDE + k] / p1_mass;  // p1 acc from pos and vel of p2.
-                mat_a[(p2_start_index + D + j, p1_start_index + k)] += force[j][1 + k] / p2_mass; // p2 acc from pos and vel of p1.
-                mat_a[(p2_start_index + D + j, p2_start_index + k)] += force[j][1 + STRIDE + k] / p2_mass;  // p2 acc from pos and vel of p2.
-                constant_term -= force[j][1 + k] * y0[p1_start_index + k] + force[j][1 + STRIDE + k] * y0[p2_start_index + k]; // Offset for linearization around y0.
+                // Acceleration based on position and velocity.
+                mat_a[(p1_loc + D + j, p1_loc + k)] -= force[j][1 + k] / p1_mass; // p1 acc from pos and vel of p1.
+                mat_a[(p1_loc + D + j, p2_loc + k)] -= force[j][1 + STRIDE + k] / p1_mass; // p1 acc from pos and vel of p2.
+                mat_a[(p2_loc + D + j, p1_loc + k)] += force[j][1 + k] / p2_mass; // p2 acc from pos and vel of p1.
+                mat_a[(p2_loc + D + j, p2_loc + k)] += force[j][1 + STRIDE + k] / p2_mass; // p2 acc from pos and vel of p2.
+
+                // Offset for linearization around y0.
+                constant_term -=
+                    force[j][1 + k] * y0[p1_loc + k] + force[j][1 + STRIDE + k] * y0[p2_loc + k];
             }
             // Constant acceleration term.
-            mat_a[(p1_start_index + D + j, N - 1)] -= constant_term / p1_mass;
-            mat_a[(p2_start_index + D + j, N - 1)] += constant_term / p2_mass;
+            mat_a[(p1_loc + D + j, N - 1)] -= constant_term / p1_mass;
+            mat_a[(p2_loc + D + j, N - 1)] += constant_term / p2_mass;
         }
     }
 
@@ -132,10 +163,10 @@ pub struct StiffPhysicsApp {
     point_mass: f32,
     points: [Vec2; NUM_POINTS],
     lengths: [f32; NUM_SPRINGS],
-    mat_a: DMatrix::<f64>,
-    simulation_state: DVector::<f64>,
-    exp_a_sim_step: DMatrix::<f64>,
-    exp_a_audio_step: DMatrix::<f64>,
+    mat_a: DMatrix<f64>,
+    simulation_state: DVector<f64>,
+    exp_a_sim_step: DMatrix<f64>,
+    exp_a_audio_step: DMatrix<f64>,
     enable_simulation: bool,
 }
 
@@ -147,15 +178,8 @@ impl Default for StiffPhysicsApp {
             spring_constant: 1000.0,
             damping: 1.0,
             point_mass: 0.01,
-            points: [
-                vec2(-0.5, 0.),
-                vec2(0., 0.5),
-                vec2(0.5, 0.),
-            ],
-            lengths: [
-                0.5,
-                0.5,
-            ],
+            points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
+            lengths: [0.5, 0.5],
             mat_a: DMatrix::<f64>::zeros(N, N),
             simulation_state: DVector::<f64>::zeros(N),
             exp_a_sim_step: DMatrix::<f64>::zeros(N, N),
@@ -195,8 +219,19 @@ impl epi::App for StiffPhysicsApp {
     /// Called each time the UI needs repainting, which may be many times per second.
     /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
-        let Self { label, spring_constant, damping, point_mass, points, lengths,
-            mat_a, simulation_state, exp_a_sim_step, exp_a_audio_step, enable_simulation } = self;
+        let Self {
+            label,
+            spring_constant,
+            damping,
+            point_mass,
+            points,
+            lengths,
+            mat_a,
+            simulation_state,
+            exp_a_sim_step,
+            exp_a_audio_step,
+            enable_simulation,
+        } = self;
 
         // Examples of how to create different panels and windows.
         // Pick whichever suits you.
@@ -243,7 +278,13 @@ impl epi::App for StiffPhysicsApp {
 
             if ui.button("Simulate").clicked() {
                 let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
-                let (a, y0) = create_diff_eq_system(points, &point_masses, lengths, *spring_constant, *damping);
+                let (a, y0) = create_diff_eq_system(
+                    points,
+                    &point_masses,
+                    lengths,
+                    *spring_constant,
+                    *damping,
+                );
                 *mat_a = a;
                 *simulation_state = y0;
                 *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
@@ -275,7 +316,7 @@ impl epi::App for StiffPhysicsApp {
             let color = Color32::BLACK;
 
             if let Some(pos) = response.interact_pointer_pos() {
-                let mut best_norm2 = 15.*15.;
+                let mut best_norm2 = 15. * 15.;
                 let mut best_point = None;
                 for (i, &mut p) in points.into_iter().enumerate() {
                     let point_in_pixels = c + p * r;
@@ -292,20 +333,26 @@ impl epi::App for StiffPhysicsApp {
             }
             if *enable_simulation {
                 for (i, &mut length) in lengths.into_iter().enumerate() {
-                    let p1 = vec2(simulation_state[i * STRIDE] as f32, simulation_state[i * STRIDE + 1] as f32);
-                    let p2 = vec2(simulation_state[(i + 1) * STRIDE] as f32, simulation_state[(i + 1) * STRIDE + 1] as f32);
+                    let p1 = vec2(
+                        simulation_state[i * STRIDE] as f32,
+                        simulation_state[i * STRIDE + 1] as f32,
+                    );
+                    let p2 = vec2(
+                        simulation_state[(i + 1) * STRIDE] as f32,
+                        simulation_state[(i + 1) * STRIDE + 1] as f32,
+                    );
                     let diff = p1 - p2;
                     let norm2 = diff.x * diff.x + diff.y * diff.y;
                     let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
                     let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
                     let stroke = Stroke::new(line_width, line_color);
-                    painter.line_segment([
-                        c + p1 * r,
-                        c + p2 * r,
-                        ], stroke);
+                    painter.line_segment([c + p1 * r, c + p2 * r], stroke);
                 }
                 for i in 0..NUM_POINTS {
-                    let p = vec2(simulation_state[i * STRIDE] as f32, simulation_state[i * STRIDE + 1] as f32);
+                    let p = vec2(
+                        simulation_state[i * STRIDE] as f32,
+                        simulation_state[i * STRIDE + 1] as f32,
+                    );
                     painter.circle_filled(c + p * r, circle_radius, color);
                 }
             }
@@ -317,10 +364,7 @@ impl epi::App for StiffPhysicsApp {
                 let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
                 let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
                 let stroke = Stroke::new(line_width, line_color);
-                painter.line_segment([
-                    c + p1 * r,
-                    c + p2 * r,
-                    ], stroke);
+                painter.line_segment([c + p1 * r, c + p2 * r], stroke);
             }
             for &mut p in points {
                 painter.circle_filled(c + p * r, circle_radius, color);

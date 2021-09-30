@@ -336,6 +336,14 @@ impl epi::App for StiffPhysicsApp {
                     }
                     *value *= i as f32 / FADE_IN_SAMPLES as f32;
                 }
+                // Fade out to remove click at the end
+                const FADE_OUT_SAMPLES: usize = 44100 / 10;
+                for (i, value) in data.iter_mut().rev().enumerate() {
+                    if i == FADE_OUT_SAMPLES {
+                        break;
+                    }
+                    *value *= i as f32 / FADE_OUT_SAMPLES as f32;
+                }
 
                 // Send data to audio player (javascript when running via wasm)
                 play_audio_buffer(data);

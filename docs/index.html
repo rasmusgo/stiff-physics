@@ -85,12 +85,11 @@
         }
 
         let audioCtx = undefined;
-        let audioBuffer = undefined;
-        let audioSource = undefined;
-
         document.getElementById('the_canvas_id').addEventListener("touchstart", function () {
-            // Play some dummy audio to please iOS
-            play_audio_buffer(Array(0,0,0,0,0));
+            if (audioCtx === undefined) {
+                // Initialize audio system by playing some dummy audio to please iOS
+                play_audio_buffer(Array(0,0,0,0,0));
+            }
         }, false);
 
         /**
@@ -103,15 +102,15 @@
                 audioCtx = new AudioContext();
             }
             // Copy data into buffer
-            audioBuffer = audioCtx.createBuffer(1, data.length, 44100);
-            let channelData = audioBuffer.getChannelData(0);
+            const buffer = audioCtx.createBuffer(1, data.length, 44100);
+            let channelData = buffer.getChannelData(0);
             for (let i = 0; i < data.length; i++) {
                 channelData[i] = data[i];
             }
-            audioSource = audioCtx.createBufferSource();
-            audioSource.buffer = audioBuffer;
-            audioSource.connect(audioCtx.destination);
-            audioSource.start();
+            let source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+            source.start();
         }
     </script>
 </body>

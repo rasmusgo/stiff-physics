@@ -329,7 +329,7 @@ impl epi::App for StiffPhysicsApp {
                     }
                 }
                 // Fade in to remove click at the start
-                const FADE_IN_SAMPLES: usize = 44100 / 10;
+                const FADE_IN_SAMPLES: usize = 44100 / 50;
                 for (i, value) in data.iter_mut().enumerate() {
                     if i == FADE_IN_SAMPLES {
                         break;
@@ -337,7 +337,7 @@ impl epi::App for StiffPhysicsApp {
                     *value *= i as f32 / FADE_IN_SAMPLES as f32;
                 }
                 // Fade out to remove click at the end
-                const FADE_OUT_SAMPLES: usize = 44100 / 10;
+                const FADE_OUT_SAMPLES: usize = 44100 / 50;
                 for (i, value) in data.iter_mut().rev().enumerate() {
                     if i == FADE_OUT_SAMPLES {
                         break;

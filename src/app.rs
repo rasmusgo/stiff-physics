@@ -269,6 +269,7 @@ impl epi::App for StiffPhysicsApp {
         if *enable_simulation {
             // Advance simulation
             *simulation_state = &*exp_a_sim_step * &*simulation_state;
+            ctx.request_repaint();
         }
 
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
@@ -327,6 +328,15 @@ impl epi::App for StiffPhysicsApp {
                         *value /= max_value;
                     }
                 }
+                // Fade in to remove click at the start
+                const FADE_IN_SAMPLES: usize = 44100 / 10;
+                for (i, value) in data.iter_mut().enumerate() {
+                    if i == FADE_IN_SAMPLES {
+                        break;
+                    }
+                    *value *= i as f32 / FADE_IN_SAMPLES as f32;
+                }
+
                 // Send data to audio player (javascript when running via wasm)
                 play_audio_buffer(data);
             }

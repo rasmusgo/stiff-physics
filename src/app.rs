@@ -36,19 +36,19 @@ const D: usize = 2;
 const STRIDE: usize = D * 2;
 const N: usize = NUM_POINTS * STRIDE + 1;
 
-fn spring_force(
-    p1_px: Hyperdual<f64, 9>,
-    p1_py: Hyperdual<f64, 9>,
-    p1_vx: Hyperdual<f64, 9>,
-    p1_vy: Hyperdual<f64, 9>,
-    p2_px: Hyperdual<f64, 9>,
-    p2_py: Hyperdual<f64, 9>,
-    p2_vx: Hyperdual<f64, 9>,
-    p2_vy: Hyperdual<f64, 9>,
+fn spring_force<const S: usize>(
+    p1_px: Hyperdual<f64, S>,
+    p1_py: Hyperdual<f64, S>,
+    p1_vx: Hyperdual<f64, S>,
+    p1_vy: Hyperdual<f64, S>,
+    p2_px: Hyperdual<f64, S>,
+    p2_py: Hyperdual<f64, S>,
+    p2_vx: Hyperdual<f64, S>,
+    p2_vy: Hyperdual<f64, S>,
     relaxed_length: f64,
     k: f64, // Spring constant
     d: f64,
-) -> [Hyperdual<f64, 9>; D] {
+) -> [Hyperdual<f64, S>; D] {
     let dx = p2_px - p1_px;
     let dy = p2_py - p1_py;
     let dvx = p2_vx - p1_vx;
@@ -56,7 +56,7 @@ fn spring_force(
     let spring_length = (dx * dx + dy * dy).sqrt();
     let spring_dirx = dx / spring_length;
     let spring_diry = dy / spring_length;
-    let force_magnitude: Hyperdual<f64, 9> = Hyperdual::from_real(k)
+    let force_magnitude: Hyperdual<f64, S> = Hyperdual::from_real(k)
         * (spring_length - Hyperdual::from_real(relaxed_length))
         + Hyperdual::from_real(d) * (spring_dirx * dvx + spring_diry * dvy);
 

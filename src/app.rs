@@ -178,6 +178,7 @@ pub struct StiffPhysicsApp {
     spring_constant: f32,
     damping: f32,
     point_mass: f32,
+    re_linearize: bool,
     points: [Vec2; NUM_POINTS],
     lengths: [f32; NUM_SPRINGS],
     mat_a: DMatrix<f64>,
@@ -195,6 +196,7 @@ impl Default for StiffPhysicsApp {
             spring_constant: 1000.0,
             damping: 0.1,
             point_mass: 0.001,
+            re_linearize: true,
             points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
             lengths: [0.5, 0.5],
             mat_a: DMatrix::<f64>::zeros(N, N),
@@ -241,6 +243,7 @@ impl epi::App for StiffPhysicsApp {
             spring_constant,
             damping,
             point_mass,
+            re_linearize,
             points,
             lengths,
             mat_a,
@@ -294,6 +297,8 @@ impl epi::App for StiffPhysicsApp {
                 }
             }
 
+            ui.checkbox(re_linearize, "Linearize around relaxed state");
+
             if ui.button("Simulate").clicked() {
                 let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
                 let (a, y0) = create_diff_eq_system(
@@ -303,7 +308,41 @@ impl epi::App for StiffPhysicsApp {
                     *spring_constant,
                     *damping,
                 );
-                *mat_a = a;
+
+                // Re-linearize around estimated relaxed state
+                *mat_a = if *re_linearize {
+                    let (q, mut t) = a.schur().unpack();
+                    for i in 0..N {
+                        if t[(i, i)] >= 0.0 {
+                            t.row_mut(i).fill(0.0);
+                        }
+                    }
+                    let y_relaxed = (q.clone() * t * q.adjoint()).exp() * &y0;
+                    let relaxed_points = [
+                        Vec2::new(
+                            y_relaxed[0 * STRIDE] as f32,
+                            y_relaxed[0 * STRIDE + 1] as f32,
+                        ),
+                        Vec2::new(
+                            y_relaxed[1 * STRIDE] as f32,
+                            y_relaxed[1 * STRIDE + 1] as f32,
+                        ),
+                        Vec2::new(
+                            y_relaxed[2 * STRIDE] as f32,
+                            y_relaxed[2 * STRIDE + 1] as f32,
+                        ),
+                    ];
+                    create_diff_eq_system(
+                        &relaxed_points,
+                        &point_masses,
+                        lengths,
+                        *spring_constant,
+                        *damping,
+                    )
+                    .0
+                } else {
+                    a
+                };
                 *simulation_state = y0;
                 *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
                 *exp_a_audio_step = (mat_a.clone() / 44100.0).exp();

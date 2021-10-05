@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use eframe::{
     egui::{self, vec2, Color32, Sense, Stroke, Vec2},
     epi,
@@ -426,58 +428,49 @@ impl epi::App for StiffPhysicsApp {
                 }
             }
             if *enable_simulation {
-                for (i, &mut length) in lengths.into_iter().enumerate() {
-                    let p1 = vec2(
-                        simulation_state[i * STRIDE] as f32,
-                        simulation_state[i * STRIDE + 1] as f32,
-                    );
-                    let p2 = vec2(
-                        simulation_state[(i + 1) * STRIDE] as f32,
-                        simulation_state[(i + 1) * STRIDE + 1] as f32,
-                    );
-                    let diff = p1 - p2;
-                    let norm2 = diff.x * diff.x + diff.y * diff.y;
-                    let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
-                    let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
-                    let stroke = Stroke::new(line_width, line_color);
-                    painter.line_segment([c + p1 * r, c + p2 * r], stroke);
-                }
-                for i in 0..NUM_POINTS {
-                    let p = vec2(
-                        simulation_state[i * STRIDE] as f32,
-                        simulation_state[i * STRIDE + 1] as f32,
-                    );
-                    painter.circle_filled(c + p * r, circle_radius, color);
-                }
+                let simulated_points: [Vec2; NUM_POINTS] = (0..NUM_POINTS)
+                    .map(|i| {
+                        vec2(
+                            simulation_state[i * STRIDE] as f32,
+                            simulation_state[i * STRIDE + 1] as f32,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap();
+                draw_particle_system(
+                    lengths,
+                    &simulated_points,
+                    line_width,
+                    &painter,
+                    c,
+                    r,
+                    circle_radius,
+                    color,
+                );
             }
             if *relaxation_iterations > 0 {
-                for (i, &mut length) in lengths.into_iter().enumerate() {
-                    let p1 = relaxed_points[i];
-                    let p2 = relaxed_points[i + 1];
-                    let diff = p1 - p2;
-                    let norm2 = diff.x * diff.x + diff.y * diff.y;
-                    let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
-                    let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
-                    let stroke = Stroke::new(line_width, line_color);
-                    painter.line_segment([c + p1 * r, c + p2 * r], stroke);
-                }
-                for &mut p in relaxed_points {
-                    painter.circle_filled(c + p * r, circle_radius, color);
-                }
+                draw_particle_system(
+                    lengths,
+                    relaxed_points,
+                    line_width,
+                    &painter,
+                    c,
+                    r,
+                    circle_radius,
+                    color,
+                );
             }
-            for (i, &mut length) in lengths.into_iter().enumerate() {
-                let p1 = points[i];
-                let p2 = points[i + 1];
-                let diff = p1 - p2;
-                let norm2 = diff.x * diff.x + diff.y * diff.y;
-                let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
-                let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
-                let stroke = Stroke::new(line_width, line_color);
-                painter.line_segment([c + p1 * r, c + p2 * r], stroke);
-            }
-            for &mut p in points {
-                painter.circle_filled(c + p * r, circle_radius, color);
-            }
+            draw_particle_system(
+                lengths,
+                points,
+                line_width,
+                &painter,
+                c,
+                r,
+                circle_radius,
+                color,
+            );
 
             ui.hyperlink("https://github.com/rasmusgo/stiff-physics");
             ui.add(egui::github_link_file!(
@@ -495,5 +488,30 @@ impl epi::App for StiffPhysicsApp {
                 ui.label("You would normally chose either panels OR windows.");
             });
         }
+    }
+}
+
+fn draw_particle_system(
+    lengths: &[f32],
+    points: &[Vec2],
+    line_width: f32,
+    painter: &egui::Painter,
+    c: egui::Pos2,
+    r: f32,
+    circle_radius: f32,
+    color: Color32,
+) {
+    for (i, &length) in lengths.into_iter().enumerate() {
+        let p1 = points[i];
+        let p2 = points[i + 1];
+        let diff: Vec2 = p1 - p2;
+        let norm2 = diff.x * diff.x + diff.y * diff.y;
+        let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
+        let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
+        let stroke = Stroke::new(line_width, line_color);
+        painter.line_segment([c + p1 * r, c + p2 * r], stroke);
+    }
+    for &p in points {
+        painter.circle_filled(c + p * r, circle_radius, color);
     }
 }

@@ -178,9 +178,10 @@ pub struct StiffPhysicsApp {
     spring_constant: f32,
     damping: f32,
     point_mass: f32,
-    re_linearize: bool,
+    relaxation_iterations: usize,
     points: [Vec2; NUM_POINTS],
     lengths: [f32; NUM_SPRINGS],
+    relaxed_points: [Vec2; NUM_POINTS],
     mat_a: DMatrix<f64>,
     simulation_state: DVector<f64>,
     exp_a_sim_step: DMatrix<f64>,
@@ -196,9 +197,10 @@ impl Default for StiffPhysicsApp {
             spring_constant: 1000.0,
             damping: 0.1,
             point_mass: 0.001,
-            re_linearize: true,
+            relaxation_iterations: 1,
             points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
             lengths: [0.5, 0.5],
+            relaxed_points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
             mat_a: DMatrix::<f64>::zeros(N, N),
             simulation_state: DVector::<f64>::zeros(N),
             exp_a_sim_step: DMatrix::<f64>::zeros(N, N),
@@ -243,9 +245,10 @@ impl epi::App for StiffPhysicsApp {
             spring_constant,
             damping,
             point_mass,
-            re_linearize,
+            relaxation_iterations,
             points,
             lengths,
+            relaxed_points,
             mat_a,
             simulation_state,
             exp_a_sim_step,
@@ -297,52 +300,49 @@ impl epi::App for StiffPhysicsApp {
                 }
             }
 
-            ui.checkbox(re_linearize, "Linearize around relaxed state");
+            ui.add(
+                egui::Slider::new(relaxation_iterations, 0..=10)
+                    .text("Relaxation iterations before linearization"),
+            );
 
-            if ui.button("Simulate").clicked() {
-                let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
-                let (a, y0) = create_diff_eq_system(
-                    points,
+            let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
+            let (mut a, y0) =
+                create_diff_eq_system(points, &point_masses, lengths, *spring_constant, *damping);
+
+            // Re-linearize around estimated relaxed state
+            for _i in 0..*relaxation_iterations {
+                // Solve for zero velocity, zero acceleration and minimal distance to y0 (TODO: weighted by mass)
+                // https://math.stackexchange.com/questions/1318637/projection-of-a-vector-onto-the-null-space-of-a-matrix
+                let y_relaxed = &y0
+                    - &a.tr_mul(&((&a * &a.transpose()).pseudo_inverse(1.0e-10).unwrap() * &a))
+                        * &y0;
+
+                *relaxed_points = [
+                    Vec2::new(
+                        y_relaxed[0 * STRIDE] as f32,
+                        y_relaxed[0 * STRIDE + 1] as f32,
+                    ),
+                    Vec2::new(
+                        y_relaxed[1 * STRIDE] as f32,
+                        y_relaxed[1 * STRIDE + 1] as f32,
+                    ),
+                    Vec2::new(
+                        y_relaxed[2 * STRIDE] as f32,
+                        y_relaxed[2 * STRIDE + 1] as f32,
+                    ),
+                ];
+                a = create_diff_eq_system(
+                    &*relaxed_points,
                     &point_masses,
                     lengths,
                     *spring_constant,
                     *damping,
-                );
+                )
+                .0;
+            }
+            *mat_a = a;
 
-                // Re-linearize around estimated relaxed state
-                *mat_a = if *re_linearize {
-                    let (q, mut t) = a.schur().unpack();
-                    for i in 0..N {
-                        if t[(i, i)] >= 0.0 {
-                            t.row_mut(i).fill(0.0);
-                        }
-                    }
-                    let y_relaxed = (q.clone() * t * q.adjoint()).exp() * &y0;
-                    let relaxed_points = [
-                        Vec2::new(
-                            y_relaxed[0 * STRIDE] as f32,
-                            y_relaxed[0 * STRIDE + 1] as f32,
-                        ),
-                        Vec2::new(
-                            y_relaxed[1 * STRIDE] as f32,
-                            y_relaxed[1 * STRIDE + 1] as f32,
-                        ),
-                        Vec2::new(
-                            y_relaxed[2 * STRIDE] as f32,
-                            y_relaxed[2 * STRIDE + 1] as f32,
-                        ),
-                    ];
-                    create_diff_eq_system(
-                        &relaxed_points,
-                        &point_masses,
-                        lengths,
-                        *spring_constant,
-                        *damping,
-                    )
-                    .0
-                } else {
-                    a
-                };
+            if ui.button("Simulate").clicked() {
                 *simulation_state = y0;
                 *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
                 *exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
@@ -447,6 +447,21 @@ impl epi::App for StiffPhysicsApp {
                         simulation_state[i * STRIDE] as f32,
                         simulation_state[i * STRIDE + 1] as f32,
                     );
+                    painter.circle_filled(c + p * r, circle_radius, color);
+                }
+            }
+            if *relaxation_iterations > 0 {
+                for (i, &mut length) in lengths.into_iter().enumerate() {
+                    let p1 = relaxed_points[i];
+                    let p2 = relaxed_points[i + 1];
+                    let diff = p1 - p2;
+                    let norm2 = diff.x * diff.x + diff.y * diff.y;
+                    let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
+                    let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
+                    let stroke = Stroke::new(line_width, line_color);
+                    painter.line_segment([c + p1 * r, c + p2 * r], stroke);
+                }
+                for &mut p in relaxed_points {
                     painter.circle_filled(c + p * r, circle_radius, color);
                 }
             }

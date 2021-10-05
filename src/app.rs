@@ -32,11 +32,36 @@ impl<T: hyperdual::Zero + hyperdual::One + Copy + nalgebra::Scalar, const N: usi
     }
 }
 
+struct Spring {
+    p1: usize,
+    p2: usize,
+    length: f32,
+    k: f32,
+    d: f32,
+}
+
 const NUM_POINTS: usize = 3;
 const NUM_SPRINGS: usize = NUM_POINTS - 1;
 const D: usize = 2;
 const STRIDE: usize = D * 2;
 const N: usize = NUM_POINTS * STRIDE + 1;
+
+const SPRINGS: [Spring; NUM_SPRINGS] = [
+    Spring {
+        p1: 0,
+        p2: 1,
+        length: 0.5,
+        k: 1000.0,
+        d: 0.1,
+    },
+    Spring {
+        p1: 1,
+        p2: 2,
+        length: 0.5,
+        k: 1000.0,
+        d: 0.1,
+    },
+];
 
 fn spring_force<const S: usize>(
     p1_px: Hyperdual<f64, S>,
@@ -71,9 +96,7 @@ fn spring_force<const S: usize>(
 fn create_diff_eq_system(
     points: &[Vec2; NUM_POINTS],
     point_masses: &[f32; NUM_POINTS],
-    lengths: &[f32; NUM_SPRINGS],
-    k: f32,
-    d: f32,
+    springs: &[Spring; NUM_SPRINGS],
 ) -> (DMatrix<f64>, DVector<f64>) {
     // Initial state
     let y0 = DVector::<f64>::from_vec(vec![
@@ -115,9 +138,9 @@ fn create_diff_eq_system(
     }
 
     // Equations for spring forces
-    for (i, &relaxed_length) in lengths.iter().enumerate() {
-        let p1_loc = i * STRIDE;
-        let p2_loc = (i + 1) * STRIDE;
+    for spring in springs {
+        let p1_loc = spring.p1 * STRIDE;
+        let p2_loc = spring.p2 * STRIDE;
 
         // Set parameters to spring function.
         p1_px[0] = y0[p1_loc];
@@ -129,8 +152,8 @@ fn create_diff_eq_system(
         p2_vx[0] = y0[p2_loc + 2];
         p2_vy[0] = y0[p2_loc + 3];
 
-        let p1_mass: f64 = point_masses[i].into();
-        let p2_mass: f64 = point_masses[i + 1].into();
+        let p1_mass: f64 = point_masses[spring.p1].into();
+        let p2_mass: f64 = point_masses[spring.p2].into();
 
         let force = spring_force(
             p1_px,
@@ -141,9 +164,9 @@ fn create_diff_eq_system(
             p2_py,
             p2_vx,
             p2_vy,
-            relaxed_length.into(),
-            k.into(),
-            d.into(),
+            spring.length.into(),
+            spring.k.into(),
+            spring.d.into(),
         );
 
         for j in 0..D {
@@ -177,12 +200,10 @@ pub struct StiffPhysicsApp {
 
     // this how you opt-out of serialization of a member
     #[cfg_attr(feature = "persistence", serde(skip))]
-    spring_constant: f32,
-    damping: f32,
     point_mass: f32,
     relaxation_iterations: usize,
     points: [Vec2; NUM_POINTS],
-    lengths: [f32; NUM_SPRINGS],
+    springs: [Spring; NUM_SPRINGS],
     relaxed_points: [Vec2; NUM_POINTS],
     mat_a: DMatrix<f64>,
     simulation_state: DVector<f64>,
@@ -196,12 +217,10 @@ impl Default for StiffPhysicsApp {
         Self {
             // Example stuff:
             label: "Hello World!".to_owned(),
-            spring_constant: 1000.0,
-            damping: 0.1,
             point_mass: 0.001,
             relaxation_iterations: 1,
             points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
-            lengths: [0.5, 0.5],
+            springs: SPRINGS,
             relaxed_points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
             mat_a: DMatrix::<f64>::zeros(N, N),
             simulation_state: DVector::<f64>::zeros(N),
@@ -244,12 +263,10 @@ impl epi::App for StiffPhysicsApp {
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
         let Self {
             label,
-            spring_constant,
-            damping,
             point_mass,
             relaxation_iterations,
             points,
-            lengths,
+            springs,
             relaxed_points,
             mat_a,
             simulation_state,
@@ -288,17 +305,19 @@ impl epi::App for StiffPhysicsApp {
                 ui.text_edit_singleline(label);
             });
 
-            ui.add(egui::Slider::new(spring_constant, 0.0..=1000.0).text("spring_constant"));
-            ui.add(egui::Slider::new(damping, 0.0..=1000.0).text("damping"));
+            for spring in &mut *springs {
+                ui.add(egui::Slider::new(&mut spring.k, 0.0..=1000.0).text("spring_constant"));
+                ui.add(egui::Slider::new(&mut spring.d, 0.0..=1000.0).text("damping"));
+            }
             ui.add(egui::Slider::new(point_mass, 0.01..=10.0).text("point_mass"));
 
             if ui.button("Store as relaxed").clicked() {
-                for (i, length) in lengths.into_iter().enumerate() {
-                    let p1 = points[i];
-                    let p2 = points[i + 1];
+                for spring in &mut *springs {
+                    let p1 = points[spring.p1];
+                    let p2 = points[spring.p2];
                     let diff = p1 - p2;
                     let norm2 = diff.x * diff.x + diff.y * diff.y;
-                    *length = norm2.sqrt();
+                    spring.length = norm2.sqrt();
                 }
             }
 
@@ -308,8 +327,7 @@ impl epi::App for StiffPhysicsApp {
             );
 
             let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
-            let (mut a, y0) =
-                create_diff_eq_system(points, &point_masses, lengths, *spring_constant, *damping);
+            let (mut a, y0) = create_diff_eq_system(points, &point_masses, &*springs);
 
             // Re-linearize around estimated relaxed state
             for _i in 0..*relaxation_iterations {
@@ -333,14 +351,7 @@ impl epi::App for StiffPhysicsApp {
                         y_relaxed[2 * STRIDE + 1] as f32,
                     ),
                 ];
-                a = create_diff_eq_system(
-                    &*relaxed_points,
-                    &point_masses,
-                    lengths,
-                    *spring_constant,
-                    *damping,
-                )
-                .0;
+                a = create_diff_eq_system(&*relaxed_points, &point_masses, &*springs).0;
             }
             *mat_a = a;
 
@@ -439,8 +450,8 @@ impl epi::App for StiffPhysicsApp {
                     .try_into()
                     .unwrap();
                 draw_particle_system(
-                    lengths,
                     &simulated_points,
+                    &*springs,
                     line_width,
                     &painter,
                     c,
@@ -451,8 +462,8 @@ impl epi::App for StiffPhysicsApp {
             }
             if *relaxation_iterations > 0 {
                 draw_particle_system(
-                    lengths,
                     relaxed_points,
+                    &*springs,
                     line_width,
                     &painter,
                     c,
@@ -462,8 +473,8 @@ impl epi::App for StiffPhysicsApp {
                 );
             }
             draw_particle_system(
-                lengths,
                 points,
+                &*springs,
                 line_width,
                 &painter,
                 c,
@@ -492,8 +503,8 @@ impl epi::App for StiffPhysicsApp {
 }
 
 fn draw_particle_system(
-    lengths: &[f32],
     points: &[Vec2],
+    springs: &[Spring],
     line_width: f32,
     painter: &egui::Painter,
     c: egui::Pos2,
@@ -501,12 +512,12 @@ fn draw_particle_system(
     circle_radius: f32,
     color: Color32,
 ) {
-    for (i, &length) in lengths.into_iter().enumerate() {
-        let p1 = points[i];
-        let p2 = points[i + 1];
+    for spring in springs {
+        let p1 = points[spring.p1];
+        let p2 = points[spring.p2];
         let diff: Vec2 = p1 - p2;
         let norm2 = diff.x * diff.x + diff.y * diff.y;
-        let stress = f32::min((length - norm2.sqrt()).abs() / length, 1.0);
+        let stress = f32::min((spring.length - norm2.sqrt()).abs() / spring.length, 1.0);
         let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
         let stroke = Stroke::new(line_width, line_color);
         painter.line_segment([c + p1 * r, c + p2 * r], stroke);

@@ -32,4 +32,4 @@ extern "C" {
 // When NOT compiling for web:
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn play_audio_buffer(data: Vec<f32>) {}
+pub fn play_audio_buffer(_data: Vec<f32>) {}

@@ -43,8 +43,8 @@ struct Spring {
 const NUM_POINTS: usize = 3;
 const NUM_SPRINGS: usize = NUM_POINTS;
 const D: usize = 2;
-const STRIDE: usize = D * 2;
-const N: usize = NUM_POINTS * STRIDE + 1;
+const BLOCK_SIZE: usize = NUM_POINTS * D;
+const N: usize = BLOCK_SIZE * 2 + 1;
 
 const SPRINGS: [Spring; NUM_SPRINGS] = [
     Spring {
@@ -109,14 +109,14 @@ fn create_diff_eq_system(
     let y0 = DVector::<f64>::from_vec(vec![
         points[0].x.into(),
         points[0].y.into(),
-        0.0, // vx
-        0.0, // vy
         points[1].x.into(),
         points[1].y.into(),
-        0.0, // vx
-        0.0, // vy
         points[2].x.into(),
         points[2].y.into(),
+        0.0, // vx
+        0.0, // vy
+        0.0, // vx
+        0.0, // vy
         0.0, // vx
         0.0, // vy
         1.0, // For transformation to homogenous system.
@@ -125,10 +125,10 @@ fn create_diff_eq_system(
     // Dual numbers for automatic differentiation of springs. (Spatial derivatives, not time derivatives).
     let mut p1_px: Hyperdual<f64, 9> = Hyperdual::from_one_hot(1);
     let mut p1_py: Hyperdual<f64, 9> = Hyperdual::from_one_hot(2);
-    let mut p1_vx: Hyperdual<f64, 9> = Hyperdual::from_one_hot(3);
-    let mut p1_vy: Hyperdual<f64, 9> = Hyperdual::from_one_hot(4);
-    let mut p2_px: Hyperdual<f64, 9> = Hyperdual::from_one_hot(5);
-    let mut p2_py: Hyperdual<f64, 9> = Hyperdual::from_one_hot(6);
+    let mut p2_px: Hyperdual<f64, 9> = Hyperdual::from_one_hot(3);
+    let mut p2_py: Hyperdual<f64, 9> = Hyperdual::from_one_hot(4);
+    let mut p1_vx: Hyperdual<f64, 9> = Hyperdual::from_one_hot(5);
+    let mut p1_vy: Hyperdual<f64, 9> = Hyperdual::from_one_hot(6);
     let mut p2_vx: Hyperdual<f64, 9> = Hyperdual::from_one_hot(7);
     let mut p2_vy: Hyperdual<f64, 9> = Hyperdual::from_one_hot(8);
 
@@ -137,27 +137,27 @@ fn create_diff_eq_system(
 
     // Equations for variable substitutions
     for i in 0..NUM_POINTS {
-        let start_index = i * STRIDE;
+        let start_index = i * D;
         for j in 0..D {
             // "velocity is velocity"
-            mat_a[(start_index + j, start_index + D + j)] = 1.0;
+            mat_a[(start_index + j, BLOCK_SIZE + start_index + j)] = 1.0;
         }
     }
 
     // Equations for spring forces
     for spring in springs {
-        let p1_loc = spring.p1 * STRIDE;
-        let p2_loc = spring.p2 * STRIDE;
+        let p1_loc = spring.p1 * D;
+        let p2_loc = spring.p2 * D;
 
         // Set parameters to spring function.
         p1_px[0] = y0[p1_loc];
         p1_py[0] = y0[p1_loc + 1];
-        p1_vx[0] = y0[p1_loc + 2];
-        p1_vy[0] = y0[p1_loc + 3];
         p2_px[0] = y0[p2_loc];
         p2_py[0] = y0[p2_loc + 1];
-        p2_vx[0] = y0[p2_loc + 2];
-        p2_vy[0] = y0[p2_loc + 3];
+        p1_vx[0] = y0[BLOCK_SIZE + p1_loc];
+        p1_vy[0] = y0[BLOCK_SIZE + p1_loc + 1];
+        p2_vx[0] = y0[BLOCK_SIZE + p2_loc];
+        p2_vy[0] = y0[BLOCK_SIZE + p2_loc + 1];
 
         let p1_mass: f64 = point_masses[spring.p1].into();
         let p2_mass: f64 = point_masses[spring.p2].into();
@@ -177,25 +177,39 @@ fn create_diff_eq_system(
         );
 
         for j in 0..D {
-            let mut constant_term = force[j][0];
-            for k in 0..STRIDE {
-                // Acceleration based on position and velocity.
-                mat_a[(p1_loc + D + j, p1_loc + k)] -= force[j][1 + k] / p1_mass; // p1 acc from pos and vel of p1.
-                mat_a[(p1_loc + D + j, p2_loc + k)] -= force[j][1 + STRIDE + k] / p1_mass; // p1 acc from pos and vel of p2.
-                mat_a[(p2_loc + D + j, p1_loc + k)] += force[j][1 + k] / p2_mass; // p2 acc from pos and vel of p1.
-                mat_a[(p2_loc + D + j, p2_loc + k)] += force[j][1 + STRIDE + k] / p2_mass; // p2 acc from pos and vel of p2.
+            for k in 0..D {
+                // Acceleration based on position
+                mat_a[(BLOCK_SIZE + p1_loc + j, p1_loc + k)] -= force[j][1 + k] / p1_mass; // p1 acc from pos of p1.
+                mat_a[(BLOCK_SIZE + p1_loc + j, p2_loc + k)] -= force[j][3 + k] / p1_mass; // p1 acc from pos of p2.
+                mat_a[(BLOCK_SIZE + p2_loc + j, p1_loc + k)] += force[j][1 + k] / p2_mass; // p2 acc from pos of p1.
+                mat_a[(BLOCK_SIZE + p2_loc + j, p2_loc + k)] += force[j][3 + k] / p2_mass; // p2 acc from pos of p2.
 
-                // Offset for linearization around y0.
-                constant_term -=
-                    force[j][1 + k] * y0[p1_loc + k] + force[j][1 + STRIDE + k] * y0[p2_loc + k];
+                // Damping
+                mat_a[(BLOCK_SIZE + p1_loc + j, BLOCK_SIZE + p1_loc + k)] -=
+                    force[j][5 + k] / p1_mass; // p1 acc from vel of p1.
+                mat_a[(BLOCK_SIZE + p1_loc + j, BLOCK_SIZE + p2_loc + k)] -=
+                    force[j][7 + k] / p1_mass; // p1 acc from vel of p2.
+                mat_a[(BLOCK_SIZE + p2_loc + j, BLOCK_SIZE + p1_loc + k)] +=
+                    force[j][5 + k] / p2_mass; // p2 acc from vel of p1.
+                mat_a[(BLOCK_SIZE + p2_loc + j, BLOCK_SIZE + p2_loc + k)] +=
+                    force[j][7 + k] / p2_mass; // p2 acc from vel of p2.
             }
+            // Offset for linearization around y0.
+            let mut constant_term = force[j][0];
+            for k in 0..D {
+                constant_term -= force[j][1 + k] * y0[p1_loc + k]
+                    + force[j][3 + k] * y0[p2_loc + k]
+                    + force[j][5 + k] * y0[BLOCK_SIZE + p1_loc + k]
+                    + force[j][7 + k] * y0[BLOCK_SIZE + p2_loc + k];
+            }
+
             // Constant acceleration term.
-            mat_a[(p1_loc + D + j, N - 1)] -= constant_term / p1_mass;
-            mat_a[(p2_loc + D + j, N - 1)] += constant_term / p2_mass;
+            mat_a[(BLOCK_SIZE + p1_loc + j, N - 1)] -= constant_term / p1_mass;
+            mat_a[(BLOCK_SIZE + p2_loc + j, N - 1)] += constant_term / p2_mass;
         }
     }
 
-    return (mat_a, y0);
+    (mat_a, y0)
 }
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
@@ -345,18 +359,9 @@ impl epi::App for StiffPhysicsApp {
                         * &y0;
 
                 *relaxed_points = [
-                    Vec2::new(
-                        y_relaxed[0 * STRIDE] as f32,
-                        y_relaxed[0 * STRIDE + 1] as f32,
-                    ),
-                    Vec2::new(
-                        y_relaxed[1 * STRIDE] as f32,
-                        y_relaxed[1 * STRIDE + 1] as f32,
-                    ),
-                    Vec2::new(
-                        y_relaxed[2 * STRIDE] as f32,
-                        y_relaxed[2 * STRIDE + 1] as f32,
-                    ),
+                    Vec2::new(y_relaxed[0 * D] as f32, y_relaxed[0 * D + 1] as f32),
+                    Vec2::new(y_relaxed[1 * D] as f32, y_relaxed[1 * D + 1] as f32),
+                    Vec2::new(y_relaxed[2 * D] as f32, y_relaxed[2 * D + 1] as f32),
                 ];
                 a = create_diff_eq_system(&*relaxed_points, &point_masses, &*springs).0;
             }
@@ -449,8 +454,8 @@ impl epi::App for StiffPhysicsApp {
                 let simulated_points: [Vec2; NUM_POINTS] = (0..NUM_POINTS)
                     .map(|i| {
                         vec2(
-                            simulation_state[i * STRIDE] as f32,
-                            simulation_state[i * STRIDE + 1] as f32,
+                            simulation_state[i * D] as f32,
+                            simulation_state[i * D + 1] as f32,
                         )
                     })
                     .collect::<Vec<_>>()

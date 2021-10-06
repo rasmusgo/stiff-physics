@@ -41,7 +41,7 @@ struct Spring {
 }
 
 const NUM_POINTS: usize = 3;
-const NUM_SPRINGS: usize = NUM_POINTS - 1;
+const NUM_SPRINGS: usize = NUM_POINTS;
 const D: usize = 2;
 const STRIDE: usize = D * 2;
 const N: usize = NUM_POINTS * STRIDE + 1;
@@ -57,6 +57,13 @@ const SPRINGS: [Spring; NUM_SPRINGS] = [
     Spring {
         p1: 1,
         p2: 2,
+        length: 0.5,
+        k: 1000.0,
+        d: 0.1,
+    },
+    Spring {
+        p1: 2,
+        p2: 0,
         length: 0.5,
         k: 1000.0,
         d: 0.1,

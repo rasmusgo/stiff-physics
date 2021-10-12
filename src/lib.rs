@@ -5,6 +5,9 @@
 mod app;
 pub use app::StiffPhysicsApp;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod audio_player;
+
 // ----------------------------------------------------------------------------
 // When compiling for web:
 
@@ -27,9 +30,3 @@ pub fn start(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
 extern "C" {
     pub fn play_audio_buffer(data: Vec<f32>);
 }
-
-// ----------------------------------------------------------------------------
-// When NOT compiling for web:
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn play_audio_buffer(_data: Vec<f32>) {}

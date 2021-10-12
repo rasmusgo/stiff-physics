@@ -7,7 +7,8 @@ use eframe::{
 use hyperdual::{Float, Hyperdual};
 use nalgebra::{self, DMatrix, DVector};
 
-use crate::play_audio_buffer;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::audio_player::AudioPlayer;
 
 trait OneHot {
     type H;
@@ -231,6 +232,8 @@ pub struct StiffPhysicsApp {
     exp_a_sim_step: DMatrix<f64>,
     exp_a_audio_step: DMatrix<f64>,
     enable_simulation: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    audio_player: AudioPlayer,
 }
 
 impl Default for StiffPhysicsApp {
@@ -248,6 +251,8 @@ impl Default for StiffPhysicsApp {
             exp_a_sim_step: DMatrix::<f64>::zeros(N, N),
             exp_a_audio_step: DMatrix::<f64>::zeros(N, N),
             enable_simulation: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_player: AudioPlayer::new().unwrap(),
         }
     }
 }
@@ -294,6 +299,8 @@ impl epi::App for StiffPhysicsApp {
             exp_a_sim_step,
             exp_a_audio_step,
             enable_simulation,
+            #[cfg(not(target_arch = "wasm32"))]
+            audio_player,
         } = self;
 
         // Examples of how to create different panels and windows.
@@ -410,7 +417,10 @@ impl epi::App for StiffPhysicsApp {
                 }
 
                 // Send data to audio player (javascript when running via wasm)
-                play_audio_buffer(data);
+                #[cfg(not(target_arch = "wasm32"))]
+                audio_player.play_audio_buffer(data).unwrap();
+                #[cfg(target_arch = "wasm32")]
+                crate::play_audio_buffer(data);
             }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {

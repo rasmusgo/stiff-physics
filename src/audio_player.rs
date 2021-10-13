@@ -3,26 +3,21 @@ use cpal;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-pub fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> anyhow::Result<cpal::Stream>
+pub fn run<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    mut next_sample: Box<dyn Send + FnMut() -> f32>,
+) -> anyhow::Result<cpal::Stream>
 where
     T: cpal::Sample,
 {
-    let sample_rate = config.sample_rate.0 as f32;
     let channels = config.channels as usize;
-
-    // Produce a sinusoid of maximum amplitude.
-    let mut sample_clock = 0f32;
-    let mut next_value = move || {
-        sample_clock = (sample_clock + 1.0) % sample_rate;
-        (sample_clock * 440.0 * std::f32::consts::TAU / sample_rate).sin()
-    };
-
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
 
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            write_data(data, channels, &mut next_value)
+            write_data(data, channels, &mut next_sample)
         },
         err_fn,
     )?;
@@ -44,7 +39,7 @@ where
 
 pub struct AudioPlayer {
     device: cpal::Device,
-    config: cpal::SupportedStreamConfig,
+    pub config: cpal::SupportedStreamConfig,
     stream: Option<anyhow::Result<cpal::Stream>>,
 }
 
@@ -69,11 +64,20 @@ impl AudioPlayer {
         })
     }
 
-    pub fn play_audio_buffer(&mut self, _data: Vec<f32>) -> anyhow::Result<()> {
+    pub fn play_audio_buffer(
+        &mut self,
+        next_sample: Box<dyn Send + FnMut() -> f32>,
+    ) -> anyhow::Result<()> {
         self.stream = Some(match self.config.sample_format() {
-            cpal::SampleFormat::F32 => run::<f32>(&self.device, &self.config.clone().into()),
-            cpal::SampleFormat::I16 => run::<i16>(&self.device, &self.config.clone().into()),
-            cpal::SampleFormat::U16 => run::<u16>(&self.device, &self.config.clone().into()),
+            cpal::SampleFormat::F32 => {
+                run::<f32>(&self.device, &self.config.clone().into(), next_sample)
+            }
+            cpal::SampleFormat::I16 => {
+                run::<i16>(&self.device, &self.config.clone().into(), next_sample)
+            }
+            cpal::SampleFormat::U16 => {
+                run::<u16>(&self.device, &self.config.clone().into(), next_sample)
+            }
         });
         Ok(())
     }

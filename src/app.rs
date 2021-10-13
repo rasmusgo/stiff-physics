@@ -379,47 +379,40 @@ impl epi::App for StiffPhysicsApp {
                 // println!("{:?}", mat_a);
                 // println!("{:?}", &*mat_a * &*simulation_state);
 
-                // Generate audio
-                let mut data = Vec::new();
+                // Generate audio to find max_value for normalization
                 let mut y = simulation_state.clone();
                 let mut max_value: f32 = 0.0;
                 for _i in 0..44100 * 3 {
                     let y_next = &*exp_a_audio_step * &y;
                     let value = (&y_next[D] - &y[D]) as f32;
                     max_value = f32::max(max_value, value.abs());
-                    data.push(value);
                     y = y_next;
                 }
-                // Normalize volume
-                if max_value > 0.0 {
-                    for value in data.iter_mut() {
-                        *value /= max_value;
-                    }
-                }
-                // Fade in to remove click at the start
-                const FADE_IN_SAMPLES: usize = 44100 / 50;
-                for (i, value) in data.iter_mut().enumerate() {
-                    if i == FADE_IN_SAMPLES {
-                        break;
-                    }
-                    *value *= i as f32 / FADE_IN_SAMPLES as f32;
-                }
-                // Fade out to remove click at the end
-                const FADE_OUT_SAMPLES: usize = 44100 / 50;
-                for (i, value) in data.iter_mut().rev().enumerate() {
-                    if i == FADE_OUT_SAMPLES {
-                        break;
-                    }
-                    *value *= i as f32 / FADE_OUT_SAMPLES as f32;
-                }
 
-                // Send data to audio player (javascript when running via wasm)
+                // Send audio generator functor to audio player
                 let mut audio_player_ref = audio_player.lock();
                 if audio_player_ref.is_none() {
                     *audio_player_ref = Some(AudioPlayer::new());
                 }
                 if let Some(Ok(player)) = audio_player_ref.as_mut() {
-                    player.play_audio_buffer(data).unwrap();
+                    let sample_rate = player.config.sample_rate().0 as f64;
+                    let exp_a_audio_step = (mat_a.clone() / sample_rate).exp();
+                    let fade_in_rate = 50.0 / sample_rate as f32;
+
+                    // Produce a waveform by advancing the simulation.
+                    let mut y = simulation_state.clone();
+                    let mut fade = 0.0;
+                    let next_sample = move || {
+                        let y_next = &exp_a_audio_step * &y;
+                        let value = fade * ((&y_next[D] - &y[D]) as f32);
+                        y = y_next;
+                        if fade < 1.0 {
+                            fade = 1.0.min(fade + fade_in_rate);
+                        }
+                        value / max_value
+                    };
+
+                    player.play_audio_buffer(Box::new(next_sample)).unwrap();
                 }
             }
 

@@ -32,6 +32,7 @@ impl<T: hyperdual::Zero + hyperdual::One + Copy + nalgebra::Scalar, const N: usi
     }
 }
 
+#[cfg_attr(feature = "persistence", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone)]
 struct Spring {
     p1: usize,
@@ -200,20 +201,20 @@ fn create_diff_eq_system(
 #[cfg_attr(feature = "persistence", derive(serde::Deserialize, serde::Serialize))]
 #[cfg_attr(feature = "persistence", serde(default))] // if we add new fields, give them default values when deserializing old state
 pub struct StiffPhysicsApp {
-    // Example stuff:
-    label: String,
-
-    // this how you opt-out of serialization of a member
-    #[cfg_attr(feature = "persistence", serde(skip))]
     point_mass: f32,
     relaxation_iterations: usize,
     points: Vec<Vec2>,
     springs: Vec<Spring>,
     relaxed_points: Vec<Vec2>,
+    #[cfg_attr(feature = "persistence", serde(skip))]
     mat_a: DMatrix<f64>,
+    #[cfg_attr(feature = "persistence", serde(skip))]
     simulation_state: DVector<f64>,
+    #[cfg_attr(feature = "persistence", serde(skip))]
     exp_a_sim_step: DMatrix<f64>,
+    #[cfg_attr(feature = "persistence", serde(skip))]
     exp_a_audio_step: DMatrix<f64>,
+    #[cfg_attr(feature = "persistence", serde(skip))]
     enable_simulation: bool,
     #[cfg_attr(feature = "persistence", serde(skip))]
     pub audio_player: Arc<Mutex<Option<anyhow::Result<AudioPlayer>>>>,
@@ -230,8 +231,6 @@ impl Default for StiffPhysicsApp {
         let system_size = block_size * 2 + 1;
 
         Self {
-            // Example stuff:
-            label: "Hello World!".to_owned(),
             point_mass: 0.001,
             relaxation_iterations: 1,
             points,
@@ -278,7 +277,6 @@ impl epi::App for StiffPhysicsApp {
     /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
         let Self {
-            label,
             point_mass,
             relaxation_iterations,
             points,
@@ -317,11 +315,6 @@ impl epi::App for StiffPhysicsApp {
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
             ui.heading("Side Panel");
 
-            ui.horizontal(|ui| {
-                ui.label("Write something: ");
-                ui.text_edit_singleline(label);
-            });
-
             for spring in &mut *springs {
                 ui.add(egui::Slider::new(&mut spring.k, 0.0..=1000.0).text("spring_constant"));
                 ui.add(egui::Slider::new(&mut spring.d, 0.0..=1000.0).text("damping"));
@@ -336,6 +329,7 @@ impl epi::App for StiffPhysicsApp {
                     let norm2 = diff.x * diff.x + diff.y * diff.y;
                     spring.length = norm2.sqrt();
                 }
+                *relaxed_points = points.clone();
             }
 
             ui.add(

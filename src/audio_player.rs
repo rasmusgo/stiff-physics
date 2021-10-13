@@ -1,110 +1,80 @@
-#[cfg(not(target_arch = "wasm32"))]
-use portaudio as pa;
+use anyhow;
+use cpal;
 
-const SAMPLE_RATE: f64 = 44_100.0;
-const FRAMES: u32 = 256;
-const CHANNELS: i32 = 2;
-const INTERLEAVED: bool = true;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+pub fn run<T>(device: &cpal::Device, config: &cpal::StreamConfig) -> anyhow::Result<cpal::Stream>
+where
+    T: cpal::Sample,
+{
+    let sample_rate = config.sample_rate.0 as f32;
+    let channels = config.channels as usize;
+
+    // Produce a sinusoid of maximum amplitude.
+    let mut sample_clock = 0f32;
+    let mut next_value = move || {
+        sample_clock = (sample_clock + 1.0) % sample_rate;
+        (sample_clock * 440.0 * std::f32::consts::TAU / sample_rate).sin()
+    };
+
+    let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
+
+    let stream = device.build_output_stream(
+        config,
+        move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+            write_data(data, channels, &mut next_value)
+        },
+        err_fn,
+    )?;
+    stream.play()?;
+    Ok(stream)
+}
+
+fn write_data<T>(output: &mut [T], channels: usize, next_sample: &mut dyn FnMut() -> f32)
+where
+    T: cpal::Sample,
+{
+    for frame in output.chunks_mut(channels) {
+        let value: T = cpal::Sample::from::<f32>(&next_sample());
+        for sample in frame.iter_mut() {
+            *sample = value;
+        }
+    }
+}
 
 pub struct AudioPlayer {
-    pa: pa::PortAudio,
-    settings: pa::DuplexStreamSettings<f32, f32>,
+    device: cpal::Device,
+    config: cpal::SupportedStreamConfig,
+    stream: Option<anyhow::Result<cpal::Stream>>,
 }
 
 impl AudioPlayer {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn new() -> Result<AudioPlayer, pa::Error> {
-        let pa = pa::PortAudio::new()?;
+    pub fn new() -> anyhow::Result<AudioPlayer> {
+        let host = cpal::default_host();
 
-        println!("PortAudio:");
-        println!("version: {}", pa.version());
-        println!("version text: {:?}", pa.version_text());
-        println!("host count: {}", pa.host_api_count()?);
+        let optional_device = host.default_output_device();
+        if let None = optional_device {
+            anyhow::bail!("No output device is available");
+        }
+        let device = optional_device.unwrap();
+        println!("Output device: {}", device.name()?);
 
-        let default_host = pa.default_host_api()?;
-        println!("default host: {:#?}", pa.host_api_info(default_host));
+        let config = device.default_output_config()?;
+        println!("Default output config: {:?}", config);
 
-        let def_input = pa.default_input_device()?;
-        let input_info = pa.device_info(def_input)?;
-        println!("Default input device info: {:#?}", &input_info);
-
-        // Construct the input stream parameters.
-        let latency = input_info.default_low_input_latency;
-        let input_params =
-            pa::StreamParameters::<f32>::new(def_input, CHANNELS, INTERLEAVED, latency);
-
-        let def_output = pa.default_output_device()?;
-        let output_info = pa.device_info(def_output)?;
-        println!("Default output device info: {:#?}", &output_info);
-
-        // Construct the output stream parameters.
-        let latency = output_info.default_low_output_latency;
-        let output_params = pa::StreamParameters::new(def_output, CHANNELS, INTERLEAVED, latency);
-
-        // Check that the stream format is supported.
-        pa.is_duplex_format_supported(input_params, output_params, SAMPLE_RATE)?;
-
-        // Construct the settings with which we'll open our duplex stream.
-        let settings =
-            pa::DuplexStreamSettings::new(input_params, output_params, SAMPLE_RATE, FRAMES);
-
-        Ok(AudioPlayer { pa, settings })
+        Ok(AudioPlayer {
+            device,
+            config,
+            stream: None,
+        })
     }
 
-    pub fn play_audio_buffer(&self, _data: Vec<f32>) -> Result<(), pa::Error> {
-        // Once the countdown reaches 0 we'll close the stream.
-        let mut count_down = 3.0;
-
-        // Keep track of the last `current_time` so we can calculate the delta time.
-        let mut maybe_last_time = None;
-
-        // We'll use this channel to send the count_down to the main thread for fun.
-        let (sender, receiver) = ::std::sync::mpsc::channel();
-
-        // A callback to pass to the non-blocking stream.
-        let callback = move |pa::DuplexStreamCallbackArgs {
-                                 in_buffer,
-                                 out_buffer,
-                                 frames,
-                                 time,
-                                 ..
-                             }| {
-            let current_time = time.current;
-            let prev_time = maybe_last_time.unwrap_or(current_time);
-            let dt = current_time - prev_time;
-            count_down -= dt;
-            maybe_last_time = Some(current_time);
-
-            assert!(frames == FRAMES as usize);
-            sender.send(count_down).ok();
-
-            // Pass the input straight to the output - BEWARE OF FEEDBACK!
-            for (output_sample, input_sample) in out_buffer.iter_mut().zip(in_buffer.iter()) {
-                *output_sample = *input_sample;
-            }
-
-            if count_down > 0.0 {
-                pa::Continue
-            } else {
-                pa::Complete
-            }
-        };
-
-        // Construct a stream with input and output sample types of f32.
-        let mut stream = self.pa.open_non_blocking_stream(self.settings, callback)?;
-
-        stream.start()?;
-
-        // Loop while the non-blocking stream is active.
-        while let true = stream.is_active()? {
-            // Do some stuff!
-            while let Ok(count_down) = receiver.try_recv() {
-                println!("count_down: {:?}", count_down);
-            }
-        }
-
-        stream.stop()?;
-
+    pub fn play_audio_buffer(&mut self, _data: Vec<f32>) -> anyhow::Result<()> {
+        self.stream = Some(match self.config.sample_format() {
+            cpal::SampleFormat::F32 => run::<f32>(&self.device, &self.config.clone().into()),
+            cpal::SampleFormat::I16 => run::<i16>(&self.device, &self.config.clone().into()),
+            cpal::SampleFormat::U16 => run::<u16>(&self.device, &self.config.clone().into()),
+        });
         Ok(())
     }
 }

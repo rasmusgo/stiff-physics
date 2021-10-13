@@ -83,35 +83,6 @@
             // This call installs a bunch of callbacks and then returns.
             wasm_bindgen.start("the_canvas_id");
         }
-
-        let audioCtx = undefined;
-        document.getElementById('the_canvas_id').addEventListener("touchstart", function () {
-            if (audioCtx === undefined) {
-                // Initialize audio system by playing some dummy audio to please iOS
-                play_audio_buffer(Array(0,0,0,0,0));
-            }
-        }, false);
-
-        /**
-         * @param {Array.<number>} [data]
-         */
-        function play_audio_buffer(data) {
-            // Init audio if not done already
-            if (audioCtx === undefined) {
-                const AudioContext = window.AudioContext || window.webkitAudioContext;
-                audioCtx = new AudioContext();
-            }
-            // Copy data into buffer
-            const buffer = audioCtx.createBuffer(1, data.length, 44100);
-            let channelData = buffer.getChannelData(0);
-            for (let i = 0; i < data.length; i++) {
-                channelData[i] = data[i];
-            }
-            let source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-            source.start();
-        }
     </script>
 </body>
 

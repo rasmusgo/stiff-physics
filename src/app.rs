@@ -1,13 +1,12 @@
-use std::convert::TryInto;
+use std::{convert::TryInto, sync::Arc};
 
 use eframe::{
-    egui::{self, vec2, Color32, Sense, Stroke, Vec2},
+    egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke, Vec2},
     epi,
 };
 use hyperdual::{Float, Hyperdual};
 use nalgebra::{self, DMatrix, DVector};
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::audio_player::AudioPlayer;
 
 trait OneHot {
@@ -232,8 +231,8 @@ pub struct StiffPhysicsApp {
     exp_a_sim_step: DMatrix<f64>,
     exp_a_audio_step: DMatrix<f64>,
     enable_simulation: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    audio_player: AudioPlayer,
+    #[cfg_attr(feature = "persistence", serde(skip))]
+    pub audio_player: Arc<Mutex<Option<anyhow::Result<AudioPlayer>>>>,
 }
 
 impl Default for StiffPhysicsApp {
@@ -251,8 +250,7 @@ impl Default for StiffPhysicsApp {
             exp_a_sim_step: DMatrix::<f64>::zeros(N, N),
             exp_a_audio_step: DMatrix::<f64>::zeros(N, N),
             enable_simulation: false,
-            #[cfg(not(target_arch = "wasm32"))]
-            audio_player: AudioPlayer::new().unwrap(),
+            audio_player: Default::default(),
         }
     }
 }
@@ -299,7 +297,6 @@ impl epi::App for StiffPhysicsApp {
             exp_a_sim_step,
             exp_a_audio_step,
             enable_simulation,
-            #[cfg(not(target_arch = "wasm32"))]
             audio_player,
         } = self;
 
@@ -417,10 +414,13 @@ impl epi::App for StiffPhysicsApp {
                 }
 
                 // Send data to audio player (javascript when running via wasm)
-                #[cfg(not(target_arch = "wasm32"))]
-                audio_player.play_audio_buffer(data).unwrap();
-                #[cfg(target_arch = "wasm32")]
-                crate::play_audio_buffer(data);
+                let mut audio_player_ref = audio_player.lock();
+                if audio_player_ref.is_none() {
+                    *audio_player_ref = Some(AudioPlayer::new());
+                }
+                if let Some(Ok(player)) = audio_player_ref.as_mut() {
+                    player.play_audio_buffer(data).unwrap();
+                }
             }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {

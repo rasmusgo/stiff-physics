@@ -3,16 +3,21 @@
 #![warn(clippy::all, rust_2018_idioms)]
 
 mod app;
-pub use app::StiffPhysicsApp;
-
-#[cfg(not(target_arch = "wasm32"))]
 mod audio_player;
+
+pub use app::StiffPhysicsApp;
 
 // ----------------------------------------------------------------------------
 // When compiling for web:
 
 #[cfg(target_arch = "wasm32")]
-use eframe::wasm_bindgen::{self, prelude::*};
+use std::sync::Arc;
+
+#[cfg(target_arch = "wasm32")]
+use eframe::{
+    egui::mutex::Mutex,
+    wasm_bindgen::{self, prelude::*, JsCast, JsValue},
+};
 
 /// This is the entry-point for all the web-assembly.
 /// This is called once from the HTML.
@@ -20,13 +25,39 @@ use eframe::wasm_bindgen::{self, prelude::*};
 /// You can add more callbacks like this if you want to call in to your code.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub fn start(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
+pub fn start(canvas_id: &str) -> Result<(), JsValue> {
     let app = StiffPhysicsApp::default();
+    install_touch_handler(canvas_id, app.audio_player.clone())?;
     eframe::start_web(canvas_id, Box::new(app))
 }
 
 #[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
-extern "C" {
-    pub fn play_audio_buffer(data: Vec<f32>);
+fn install_touch_handler(
+    canvas_id: &str,
+    audio_player: Arc<Mutex<Option<anyhow::Result<audio_player::AudioPlayer>>>>,
+) -> Result<(), JsValue> {
+    let document = web_sys::window()
+        .ok_or("Failed to get window")?
+        .document()
+        .ok_or("Failed to get document")?;
+    let canvas = document
+        .get_element_by_id(canvas_id)
+        .ok_or("Failed to get canvas")?;
+
+    {
+        let event_name = "touchstart";
+        let closure = Closure::wrap(Box::new(move |_event: web_sys::TouchEvent| {
+            let mut audio_player_ref = audio_player.lock();
+            if audio_player_ref.is_none() {
+                *audio_player_ref = Some(audio_player::AudioPlayer::new());
+            }
+
+            // event.stop_propagation();
+            // event.prevent_default();
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    Ok(())
 }

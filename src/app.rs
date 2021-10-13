@@ -427,8 +427,6 @@ impl epi::App for StiffPhysicsApp {
             let c = rect.center();
             let r = rect.width() / 2. - 1.;
             let line_width = f32::max(r / 500., 1.0);
-            let circle_radius = r / 100.;
-            let color = Color32::BLACK;
 
             if let Some(pos) = response.interact_pointer_pos() {
                 let mut best_norm2 = 15. * 15.;
@@ -457,39 +455,12 @@ impl epi::App for StiffPhysicsApp {
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap();
-                draw_particle_system(
-                    &simulated_points,
-                    &*springs,
-                    line_width,
-                    &painter,
-                    c,
-                    r,
-                    circle_radius,
-                    color,
-                );
+                draw_particle_system(&simulated_points, &*springs, line_width, &painter, c, r);
             }
             if *relaxation_iterations > 0 {
-                draw_particle_system(
-                    relaxed_points,
-                    &*springs,
-                    line_width,
-                    &painter,
-                    c,
-                    r,
-                    circle_radius,
-                    color,
-                );
+                draw_particle_system(relaxed_points, &*springs, line_width, &painter, c, r);
             }
-            draw_particle_system(
-                points,
-                &*springs,
-                line_width,
-                &painter,
-                c,
-                r,
-                circle_radius,
-                color,
-            );
+            draw_particle_system(points, &*springs, line_width, &painter, c, r);
 
             ui.hyperlink("https://github.com/rasmusgo/stiff-physics");
             ui.add(egui::github_link_file!(
@@ -517,9 +488,9 @@ fn draw_particle_system(
     painter: &egui::Painter,
     c: egui::Pos2,
     r: f32,
-    circle_radius: f32,
-    color: Color32,
 ) {
+    let circle_radius = r / 100.;
+    let color = Color32::BLACK;
     for spring in springs {
         let p1 = points[spring.p1];
         let p2 = points[spring.p2];

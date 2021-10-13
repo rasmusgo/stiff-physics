@@ -5,7 +5,7 @@ use eframe::{
     epi,
 };
 use hyperdual::{Float, Hyperdual};
-use nalgebra::{self, DMatrix, DVector};
+use nalgebra::{self, DMatrix, DVector, SVector};
 
 use crate::audio_player::AudioPlayer;
 
@@ -70,35 +70,23 @@ const SPRINGS: [Spring; NUM_SPRINGS] = [
     },
 ];
 
-// HyperVec2
 fn spring_force<const S: usize>(
-    p1_px: Hyperdual<f64, S>,
-    p1_py: Hyperdual<f64, S>,
-    p1_vx: Hyperdual<f64, S>,
-    p1_vy: Hyperdual<f64, S>,
-    p2_px: Hyperdual<f64, S>,
-    p2_py: Hyperdual<f64, S>,
-    p2_vx: Hyperdual<f64, S>,
-    p2_vy: Hyperdual<f64, S>,
+    p1_pos: SVector<Hyperdual<f64, S>, D>,
+    p1_vel: SVector<Hyperdual<f64, S>, D>,
+    p2_pos: SVector<Hyperdual<f64, S>, D>,
+    p2_vel: SVector<Hyperdual<f64, S>, D>,
     relaxed_length: f64,
     k: f64, // Spring constant
     d: f64,
-) -> [Hyperdual<f64, S>; D] {
-    let dx = p2_px - p1_px;
-    let dy = p2_py - p1_py;
-    let dvx = p2_vx - p1_vx;
-    let dvy = p2_vy - p1_vy;
-    let spring_length = (dx * dx + dy * dy).sqrt();
-    let spring_dirx = dx / spring_length;
-    let spring_diry = dy / spring_length;
+) -> SVector<Hyperdual<f64, S>, D> {
+    let dpos = p2_pos - p1_pos;
+    let dvel = p2_vel - p1_vel;
+    let spring_length = dpos.dot(&dpos).sqrt();
+    let spring_dir = dpos / spring_length;
     let force_magnitude: Hyperdual<f64, S> = Hyperdual::from_real(k)
         * (spring_length - Hyperdual::from_real(relaxed_length))
-        + Hyperdual::from_real(d) * (spring_dirx * dvx + spring_diry * dvy);
-
-    let force_x = spring_dirx * -force_magnitude;
-    let force_y = spring_diry * -force_magnitude;
-
-    [force_x, force_y]
+        + Hyperdual::from_real(d) * spring_dir.dot(&dvel);
+    spring_dir * -force_magnitude
 }
 
 fn create_diff_eq_system(
@@ -124,14 +112,22 @@ fn create_diff_eq_system(
     ]);
 
     // Dual numbers for automatic differentiation of springs. (Spatial derivatives, not time derivatives).
-    let mut p1_px: Hyperdual<f64, 9> = Hyperdual::from_one_hot(1);
-    let mut p1_py: Hyperdual<f64, 9> = Hyperdual::from_one_hot(2);
-    let mut p2_px: Hyperdual<f64, 9> = Hyperdual::from_one_hot(3);
-    let mut p2_py: Hyperdual<f64, 9> = Hyperdual::from_one_hot(4);
-    let mut p1_vx: Hyperdual<f64, 9> = Hyperdual::from_one_hot(5);
-    let mut p1_vy: Hyperdual<f64, 9> = Hyperdual::from_one_hot(6);
-    let mut p2_vx: Hyperdual<f64, 9> = Hyperdual::from_one_hot(7);
-    let mut p2_vy: Hyperdual<f64, 9> = Hyperdual::from_one_hot(8);
+    let mut p1_pos = SVector::<Hyperdual<f64, 9>, D>::new(
+        Hyperdual::from_one_hot(1),
+        Hyperdual::from_one_hot(2),
+    );
+    let mut p2_pos = SVector::<Hyperdual<f64, 9>, D>::new(
+        Hyperdual::from_one_hot(3),
+        Hyperdual::from_one_hot(4),
+    );
+    let mut p1_vel = SVector::<Hyperdual<f64, 9>, D>::new(
+        Hyperdual::from_one_hot(5),
+        Hyperdual::from_one_hot(6),
+    );
+    let mut p2_vel = SVector::<Hyperdual<f64, 9>, D>::new(
+        Hyperdual::from_one_hot(7),
+        Hyperdual::from_one_hot(8),
+    );
 
     // Construct A matrix for y' = Ay. (Time derivative of state vector).
     let mut mat_a = DMatrix::zeros(N, N);
@@ -151,27 +147,23 @@ fn create_diff_eq_system(
         let p2_loc = spring.p2 * D;
 
         // Set parameters to spring function.
-        p1_px[0] = y0[p1_loc];
-        p1_py[0] = y0[p1_loc + 1];
-        p2_px[0] = y0[p2_loc];
-        p2_py[0] = y0[p2_loc + 1];
-        p1_vx[0] = y0[BLOCK_SIZE + p1_loc];
-        p1_vy[0] = y0[BLOCK_SIZE + p1_loc + 1];
-        p2_vx[0] = y0[BLOCK_SIZE + p2_loc];
-        p2_vy[0] = y0[BLOCK_SIZE + p2_loc + 1];
+        p1_pos[0][0] = y0[p1_loc];
+        p1_pos[1][0] = y0[p1_loc + 1];
+        p2_pos[0][0] = y0[p2_loc];
+        p2_pos[1][0] = y0[p2_loc + 1];
+        p1_vel[0][0] = y0[BLOCK_SIZE + p1_loc];
+        p1_vel[1][0] = y0[BLOCK_SIZE + p1_loc + 1];
+        p2_vel[0][0] = y0[BLOCK_SIZE + p2_loc];
+        p2_vel[1][0] = y0[BLOCK_SIZE + p2_loc + 1];
 
         let p1_mass: f64 = point_masses[spring.p1].into();
         let p2_mass: f64 = point_masses[spring.p2].into();
 
         let force = spring_force(
-            p1_px,
-            p1_py,
-            p1_vx,
-            p1_vy,
-            p2_px,
-            p2_py,
-            p2_vx,
-            p2_vy,
+            p1_pos,
+            p1_vel,
+            p2_pos,
+            p2_vel,
             spring.length.into(),
             spring.k.into(),
             spring.d.into(),

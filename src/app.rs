@@ -70,6 +70,7 @@ const SPRINGS: [Spring; NUM_SPRINGS] = [
     },
 ];
 
+// HyperVec2
 fn spring_force<const S: usize>(
     p1_px: Hyperdual<f64, S>,
     p1_py: Hyperdual<f64, S>,
@@ -97,7 +98,7 @@ fn spring_force<const S: usize>(
     let force_x = spring_dirx * -force_magnitude;
     let force_y = spring_diry * -force_magnitude;
 
-    return [force_x, force_y];
+    [force_x, force_y]
 }
 
 fn create_diff_eq_system(
@@ -106,7 +107,7 @@ fn create_diff_eq_system(
     springs: &[Spring; NUM_SPRINGS],
 ) -> (DMatrix<f64>, DVector<f64>) {
     // Initial state
-    let y0 = DVector::<f64>::from_vec(vec![
+    let y0 = DVector::from_vec(vec![
         points[0].x.into(),
         points[0].y.into(),
         points[1].x.into(),
@@ -133,7 +134,7 @@ fn create_diff_eq_system(
     let mut p2_vy: Hyperdual<f64, 9> = Hyperdual::from_one_hot(8);
 
     // Construct A matrix for y' = Ay. (Time derivative of state vector).
-    let mut mat_a = DMatrix::<f64>::zeros(N, N);
+    let mut mat_a = DMatrix::zeros(N, N);
 
     // Equations for variable substitutions
     for i in 0..NUM_POINTS {
@@ -384,7 +385,7 @@ impl epi::App for StiffPhysicsApp {
                 let mut max_value: f32 = 0.0;
                 for _i in 0..44100 * 3 {
                     let y_next = &*exp_a_audio_step * &y;
-                    let value = (&y_next[D] - &y[D]) as f32;
+                    let value = (y_next[D] - y[D]) as f32;
                     max_value = f32::max(max_value, value.abs());
                     y = y_next;
                 }
@@ -404,7 +405,7 @@ impl epi::App for StiffPhysicsApp {
                     let mut fade = 0.0;
                     let next_sample = move || {
                         let y_next = &exp_a_audio_step * &y;
-                        let value = fade * ((&y_next[D] - &y[D]) as f32);
+                        let value = fade * ((y_next[D] - y[D]) as f32);
                         y = y_next;
                         if fade < 1.0 {
                             fade = 1.0.min(fade + fade_in_rate);
@@ -440,7 +441,7 @@ impl epi::App for StiffPhysicsApp {
             if let Some(pos) = response.interact_pointer_pos() {
                 let mut best_norm2 = 15. * 15.;
                 let mut best_point = None;
-                for (i, &mut p) in points.into_iter().enumerate() {
+                for (i, &mut p) in points.iter_mut().enumerate() {
                     let point_in_pixels = c + p * r;
                     let diff = pos - point_in_pixels;
                     let norm2 = diff.x * diff.x + diff.y * diff.y;

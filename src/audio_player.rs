@@ -1,6 +1,3 @@
-use anyhow;
-use cpal;
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 pub fn run<T>(
@@ -48,7 +45,7 @@ impl AudioPlayer {
         let host = cpal::default_host();
 
         let optional_device = host.default_output_device();
-        if let None = optional_device {
+        if optional_device.is_none() {
             anyhow::bail!("No output device is available");
         }
         let device = optional_device.unwrap();

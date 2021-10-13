@@ -1,4 +1,4 @@
-use std::{convert::TryInto, sync::Arc};
+use std::sync::Arc;
 
 use eframe::{
     egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke, Vec2},
@@ -32,6 +32,7 @@ impl<T: hyperdual::Zero + hyperdual::One + Copy + nalgebra::Scalar, const N: usi
     }
 }
 
+#[derive(Clone)]
 struct Spring {
     p1: usize,
     p2: usize,
@@ -40,13 +41,9 @@ struct Spring {
     d: f32,
 }
 
-const NUM_POINTS: usize = 3;
-const NUM_SPRINGS: usize = NUM_POINTS;
 const D: usize = 2;
-const BLOCK_SIZE: usize = NUM_POINTS * D;
-const N: usize = BLOCK_SIZE * 2 + 1;
 
-const SPRINGS: [Spring; NUM_SPRINGS] = [
+const SPRINGS: [Spring; 3] = [
     Spring {
         p1: 0,
         p2: 1,
@@ -90,26 +87,23 @@ fn spring_force<const S: usize>(
 }
 
 fn create_diff_eq_system(
-    points: &[Vec2; NUM_POINTS],
-    point_masses: &[f32; NUM_POINTS],
-    springs: &[Spring; NUM_SPRINGS],
+    points: &[Vec2],
+    point_masses: &[f32],
+    springs: &[Spring],
 ) -> (DMatrix<f64>, DVector<f64>) {
+    assert_eq!(points.len(), point_masses.len());
+    let num_points = points.len();
+    let block_size = num_points * D;
+    let system_size = block_size * 2 + 1;
+
     // Initial state
-    let y0 = DVector::from_vec(vec![
-        points[0].x.into(),
-        points[0].y.into(),
-        points[1].x.into(),
-        points[1].y.into(),
-        points[2].x.into(),
-        points[2].y.into(),
-        0.0, // vx
-        0.0, // vy
-        0.0, // vx
-        0.0, // vy
-        0.0, // vx
-        0.0, // vy
-        1.0, // For transformation to homogenous system.
-    ]);
+    let mut y0 = DVector::zeros(system_size);
+    for i in 0..num_points {
+        for j in 0..D {
+            y0[i * D + j] = points[i][j] as f64;
+        }
+    }
+    y0[system_size - 1] = 1.0; // For transformation to homogenous system.
 
     // Dual numbers for automatic differentiation of springs. (Spatial derivatives, not time derivatives).
     let mut p1_pos = SVector::<Hyperdual<f64, 9>, D>::new(
@@ -130,15 +124,12 @@ fn create_diff_eq_system(
     );
 
     // Construct A matrix for y' = Ay. (Time derivative of state vector).
-    let mut mat_a = DMatrix::zeros(N, N);
+    let mut mat_a = DMatrix::zeros(system_size, system_size);
 
     // Equations for variable substitutions
-    for i in 0..NUM_POINTS {
-        let start_index = i * D;
-        for j in 0..D {
-            // "velocity is velocity"
-            mat_a[(start_index + j, BLOCK_SIZE + start_index + j)] = 1.0;
-        }
+    for i in 0..num_points * D {
+        // "velocity is velocity"
+        mat_a[(i, block_size + i)] = 1.0;
     }
 
     // Equations for spring forces
@@ -151,10 +142,10 @@ fn create_diff_eq_system(
         p1_pos[1][0] = y0[p1_loc + 1];
         p2_pos[0][0] = y0[p2_loc];
         p2_pos[1][0] = y0[p2_loc + 1];
-        p1_vel[0][0] = y0[BLOCK_SIZE + p1_loc];
-        p1_vel[1][0] = y0[BLOCK_SIZE + p1_loc + 1];
-        p2_vel[0][0] = y0[BLOCK_SIZE + p2_loc];
-        p2_vel[1][0] = y0[BLOCK_SIZE + p2_loc + 1];
+        p1_vel[0][0] = y0[block_size + p1_loc];
+        p1_vel[1][0] = y0[block_size + p1_loc + 1];
+        p2_vel[0][0] = y0[block_size + p2_loc];
+        p2_vel[1][0] = y0[block_size + p2_loc + 1];
 
         let p1_mass: f64 = point_masses[spring.p1].into();
         let p2_mass: f64 = point_masses[spring.p2].into();
@@ -172,19 +163,19 @@ fn create_diff_eq_system(
         for j in 0..D {
             for k in 0..D {
                 // Acceleration based on position
-                mat_a[(BLOCK_SIZE + p1_loc + j, p1_loc + k)] -= force[j][1 + k] / p1_mass; // p1 acc from pos of p1.
-                mat_a[(BLOCK_SIZE + p1_loc + j, p2_loc + k)] -= force[j][3 + k] / p1_mass; // p1 acc from pos of p2.
-                mat_a[(BLOCK_SIZE + p2_loc + j, p1_loc + k)] += force[j][1 + k] / p2_mass; // p2 acc from pos of p1.
-                mat_a[(BLOCK_SIZE + p2_loc + j, p2_loc + k)] += force[j][3 + k] / p2_mass; // p2 acc from pos of p2.
+                mat_a[(block_size + p1_loc + j, p1_loc + k)] -= force[j][1 + k] / p1_mass; // p1 acc from pos of p1.
+                mat_a[(block_size + p1_loc + j, p2_loc + k)] -= force[j][3 + k] / p1_mass; // p1 acc from pos of p2.
+                mat_a[(block_size + p2_loc + j, p1_loc + k)] += force[j][1 + k] / p2_mass; // p2 acc from pos of p1.
+                mat_a[(block_size + p2_loc + j, p2_loc + k)] += force[j][3 + k] / p2_mass; // p2 acc from pos of p2.
 
                 // Damping
-                mat_a[(BLOCK_SIZE + p1_loc + j, BLOCK_SIZE + p1_loc + k)] -=
+                mat_a[(block_size + p1_loc + j, block_size + p1_loc + k)] -=
                     force[j][5 + k] / p1_mass; // p1 acc from vel of p1.
-                mat_a[(BLOCK_SIZE + p1_loc + j, BLOCK_SIZE + p2_loc + k)] -=
+                mat_a[(block_size + p1_loc + j, block_size + p2_loc + k)] -=
                     force[j][7 + k] / p1_mass; // p1 acc from vel of p2.
-                mat_a[(BLOCK_SIZE + p2_loc + j, BLOCK_SIZE + p1_loc + k)] +=
+                mat_a[(block_size + p2_loc + j, block_size + p1_loc + k)] +=
                     force[j][5 + k] / p2_mass; // p2 acc from vel of p1.
-                mat_a[(BLOCK_SIZE + p2_loc + j, BLOCK_SIZE + p2_loc + k)] +=
+                mat_a[(block_size + p2_loc + j, block_size + p2_loc + k)] +=
                     force[j][7 + k] / p2_mass; // p2 acc from vel of p2.
             }
             // Offset for linearization around y0.
@@ -192,13 +183,13 @@ fn create_diff_eq_system(
             for k in 0..D {
                 constant_term -= force[j][1 + k] * y0[p1_loc + k]
                     + force[j][3 + k] * y0[p2_loc + k]
-                    + force[j][5 + k] * y0[BLOCK_SIZE + p1_loc + k]
-                    + force[j][7 + k] * y0[BLOCK_SIZE + p2_loc + k];
+                    + force[j][5 + k] * y0[block_size + p1_loc + k]
+                    + force[j][7 + k] * y0[block_size + p2_loc + k];
             }
 
             // Constant acceleration term.
-            mat_a[(BLOCK_SIZE + p1_loc + j, N - 1)] -= constant_term / p1_mass;
-            mat_a[(BLOCK_SIZE + p2_loc + j, N - 1)] += constant_term / p2_mass;
+            mat_a[(block_size + p1_loc + j, system_size - 1)] -= constant_term / p1_mass;
+            mat_a[(block_size + p2_loc + j, system_size - 1)] += constant_term / p2_mass;
         }
     }
 
@@ -216,9 +207,9 @@ pub struct StiffPhysicsApp {
     #[cfg_attr(feature = "persistence", serde(skip))]
     point_mass: f32,
     relaxation_iterations: usize,
-    points: [Vec2; NUM_POINTS],
-    springs: [Spring; NUM_SPRINGS],
-    relaxed_points: [Vec2; NUM_POINTS],
+    points: Vec<Vec2>,
+    springs: Vec<Spring>,
+    relaxed_points: Vec<Vec2>,
     mat_a: DMatrix<f64>,
     simulation_state: DVector<f64>,
     exp_a_sim_step: DMatrix<f64>,
@@ -230,18 +221,26 @@ pub struct StiffPhysicsApp {
 
 impl Default for StiffPhysicsApp {
     fn default() -> Self {
+        let points = vec![vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)];
+        let springs = SPRINGS.to_vec();
+        let relaxed_points = vec![vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)];
+        assert_eq!(points.len(), relaxed_points.len());
+        let num_points = points.len();
+        let block_size = num_points * D;
+        let system_size = block_size * 2 + 1;
+
         Self {
             // Example stuff:
             label: "Hello World!".to_owned(),
             point_mass: 0.001,
             relaxation_iterations: 1,
-            points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
-            springs: SPRINGS,
-            relaxed_points: [vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)],
-            mat_a: DMatrix::zeros(N, N),
-            simulation_state: DVector::zeros(N),
-            exp_a_sim_step: DMatrix::zeros(N, N),
-            exp_a_audio_step: DMatrix::zeros(N, N),
+            points,
+            springs,
+            relaxed_points,
+            mat_a: DMatrix::zeros(system_size, system_size),
+            simulation_state: DVector::zeros(system_size),
+            exp_a_sim_step: DMatrix::zeros(system_size, system_size),
+            exp_a_audio_step: DMatrix::zeros(system_size, system_size),
             enable_simulation: false,
             audio_player: Default::default(),
         }
@@ -344,7 +343,7 @@ impl epi::App for StiffPhysicsApp {
                     .text("Relaxation iterations before linearization"),
             );
 
-            let point_masses: [f32; 3] = [*point_mass, *point_mass, *point_mass];
+            let point_masses = [*point_mass].repeat(points.len());
             let (mut a, y0) = create_diff_eq_system(points, &point_masses, &*springs);
 
             // Re-linearize around estimated relaxed state
@@ -354,13 +353,11 @@ impl epi::App for StiffPhysicsApp {
                 let y_relaxed = &y0
                     - &a.tr_mul(&((&a * &a.transpose()).pseudo_inverse(1.0e-10).unwrap() * &a))
                         * &y0;
-
-                *relaxed_points = [
-                    Vec2::new(y_relaxed[0 * D] as f32, y_relaxed[0 * D + 1] as f32),
-                    Vec2::new(y_relaxed[1 * D] as f32, y_relaxed[1 * D + 1] as f32),
-                    Vec2::new(y_relaxed[2 * D] as f32, y_relaxed[2 * D + 1] as f32),
-                ];
-                a = create_diff_eq_system(&*relaxed_points, &point_masses, &*springs).0;
+                relaxed_points.clear();
+                for i in 0..points.len() {
+                    relaxed_points.push(vec2(y_relaxed[i * D] as f32, y_relaxed[i * D + 1] as f32));
+                }
+                a = create_diff_eq_system(relaxed_points.as_slice(), &point_masses, &*springs).0;
             }
             *mat_a = a;
 
@@ -445,17 +442,15 @@ impl epi::App for StiffPhysicsApp {
                 }
             }
             if *enable_simulation {
-                let simulated_points: [Vec2; NUM_POINTS] = (0..NUM_POINTS)
-                    .map(|i| {
-                        vec2(
-                            simulation_state[i * D] as f32,
-                            simulation_state[i * D + 1] as f32,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap();
-                draw_particle_system(&simulated_points, &*springs, line_width, &painter, c, r);
+                let num_simulated_points = simulation_state.len() / 4;
+                let mut simulated_points = Vec::<Vec2>::with_capacity(num_simulated_points);
+                for i in 0..num_simulated_points {
+                    simulated_points.push(vec2(
+                        simulation_state[i * D] as f32,
+                        simulation_state[i * D + 1] as f32,
+                    ));
+                }
+                draw_particle_system(&simulated_points[..], &*springs, line_width, &painter, c, r);
             }
             if *relaxation_iterations > 0 {
                 draw_particle_system(relaxed_points, &*springs, line_width, &painter, c, r);

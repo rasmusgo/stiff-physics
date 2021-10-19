@@ -15,6 +15,7 @@ cpal = { version = "0.13.4", features = ["wasm-bindgen"] }
 eframe = "0.14.0" # Gives us egui, epi and web+native backends
 hyperdual = "0.5.0"
 nalgebra = "0.29"
+rtrb = "0.2.0"
 serde = { version = "1", features = ["derive"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

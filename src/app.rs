@@ -377,9 +377,6 @@ impl epi::App for StiffPhysicsApp {
                 let mut audio_player_ref = audio_player.lock();
                 if audio_player_ref.is_none() {
                     *audio_player_ref = Some(AudioPlayer::new());
-                    if let Some(Ok(player)) = audio_player_ref.as_mut() {
-                        player.start_output_stream().unwrap();
-                    }
                 }
                 if let Some(Ok(player)) = audio_player_ref.as_mut() {
                     let sample_rate = player.config.sample_rate().0 as f64;

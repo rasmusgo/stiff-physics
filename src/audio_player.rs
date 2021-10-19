@@ -24,15 +24,17 @@ impl AudioPlayer {
         let config = device.default_output_config()?;
         println!("Default output config: {:?}", config);
 
-        Ok(AudioPlayer {
+        let mut audio_player = AudioPlayer {
             device,
             config,
             stream: None,
             producer: None,
-        })
+        };
+        audio_player.start_output_stream()?;
+        Ok(audio_player)
     }
 
-    pub fn start_output_stream(&mut self) -> anyhow::Result<()> {
+    fn start_output_stream(&mut self) -> anyhow::Result<()> {
         let (producer, mut consumer) = rtrb::RingBuffer::new(2);
         let mut stored_sampling_function: Option<SamplingFunction> = None;
         let next_sample = move || {

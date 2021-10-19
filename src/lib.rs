@@ -50,9 +50,6 @@ fn install_touch_handler(
             let mut audio_player_ref = audio_player.lock();
             if audio_player_ref.is_none() {
                 *audio_player_ref = Some(audio_player::AudioPlayer::new());
-                if let Some(Ok(player)) = audio_player_ref.as_mut() {
-                    player.start_output_stream().unwrap();
-                }
             }
         }) as Box<dyn FnMut(_)>);
         canvas.add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref())?;

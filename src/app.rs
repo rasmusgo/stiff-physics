@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 use eframe::{
     egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke, Vec2},
@@ -397,6 +397,19 @@ impl epi::App for StiffPhysicsApp {
                     };
 
                     player.play_audio(Box::new(next_sample)).unwrap();
+                }
+            }
+
+            if let Some(Ok(player)) = audio_player.lock().as_mut() {
+                let mut enable_band_pass_filter =
+                    player.enable_band_pass_filter.load(Ordering::Relaxed);
+                if ui
+                    .checkbox(&mut enable_band_pass_filter, "Enable band-pass filter")
+                    .clicked()
+                {
+                    player
+                        .enable_band_pass_filter
+                        .fetch_xor(true, Ordering::SeqCst);
                 }
             }
 

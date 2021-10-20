@@ -1,3 +1,8 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use anyhow::anyhow;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -8,6 +13,7 @@ pub struct AudioPlayer {
     pub config: cpal::SupportedStreamConfig,
     stream: Option<anyhow::Result<cpal::Stream>>,
     producer: Option<rtrb::Producer<SamplingFunction>>,
+    pub enable_band_pass_filter: Arc<AtomicBool>,
 }
 
 impl AudioPlayer {
@@ -29,6 +35,7 @@ impl AudioPlayer {
             config,
             stream: None,
             producer: None,
+            enable_band_pass_filter: Arc::new(AtomicBool::new(true)),
         };
         audio_player.start_output_stream()?;
         Ok(audio_player)
@@ -37,15 +44,34 @@ impl AudioPlayer {
     fn start_output_stream(&mut self) -> anyhow::Result<()> {
         let (producer, mut consumer) = rtrb::RingBuffer::new(2);
         let mut stored_sampling_function: Option<SamplingFunction> = None;
+        // Exponential moving average band-pass filtering
+        const ALPHA1: f32 = 0.01;
+        const ALPHA2: f32 = 0.001;
+        let mut moving_average1 = 0_f32;
+        let mut moving_average2 = 0_f32;
+        let enable_band_pass_filter = self.enable_band_pass_filter.clone();
         let next_sample = move || {
             if let Ok(new_sampling_function) = consumer.pop() {
                 stored_sampling_function = Some(new_sampling_function);
             }
 
-            if let Some(sampling_function) = &mut stored_sampling_function {
-                return sampling_function();
+            let value = if let Some(sampling_function) = &mut stored_sampling_function {
+                let sample = sampling_function();
+                if sample.is_finite() {
+                    sample
+                } else {
+                    0_f32
+                }
+            } else {
+                0_f32
+            };
+            moving_average1 = moving_average1 * (1.0 - ALPHA1) + value * ALPHA1;
+            moving_average2 = moving_average2 * (1.0 - ALPHA2) + value * ALPHA2;
+            if enable_band_pass_filter.load(Ordering::SeqCst) {
+                moving_average1 - moving_average2
+            } else {
+                value
             }
-            0_f32
         };
         self.producer = Some(producer);
         self.stream = Some(match self.config.sample_format() {

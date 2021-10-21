@@ -4,6 +4,7 @@ use eframe::{
     egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke, Vec2},
     epi,
 };
+use egui::plot::{Line, Plot, Value, Values};
 use hyperdual::{Float, Hyperdual};
 use nalgebra::{self, DMatrix, DVector, SVector};
 
@@ -218,6 +219,10 @@ pub struct StiffPhysicsApp {
     enable_simulation: bool,
     #[cfg_attr(feature = "persistence", serde(skip))]
     pub audio_player: Arc<Mutex<Option<anyhow::Result<AudioPlayer>>>>,
+    #[cfg_attr(feature = "persistence", serde(skip))]
+    audio_history: Vec<(f32, f32)>,
+    #[cfg_attr(feature = "persistence", serde(skip))]
+    audio_history_index: usize,
 }
 
 impl Default for StiffPhysicsApp {
@@ -242,6 +247,8 @@ impl Default for StiffPhysicsApp {
             exp_a_audio_step: DMatrix::zeros(system_size, system_size),
             enable_simulation: false,
             audio_player: Default::default(),
+            audio_history: Vec::new(),
+            audio_history_index: 0,
         }
     }
 }
@@ -288,6 +295,8 @@ impl epi::App for StiffPhysicsApp {
             exp_a_audio_step,
             enable_simulation,
             audio_player,
+            audio_history,
+            audio_history_index,
         } = self;
 
         // Examples of how to create different panels and windows.
@@ -411,6 +420,37 @@ impl epi::App for StiffPhysicsApp {
                         .enable_band_pass_filter
                         .fetch_xor(true, Ordering::SeqCst);
                 }
+                let sample_rate = player.config.sample_rate().0 as usize;
+                if let Some(consumer) = &mut player.to_ui_consumer {
+                    while let Ok(data) = consumer.pop() {
+                        if audio_history.len() < sample_rate {
+                            audio_history.push(data);
+                        } else {
+                            audio_history[*audio_history_index] = data;
+                            *audio_history_index = (*audio_history_index + 1) % audio_history.len();
+                        }
+                    }
+                }
+
+                let (left, right) = audio_history.split_at(*audio_history_index);
+                let line_raw =
+                    Line::new(Values::from_values_iter(
+                        right.iter().chain(left).enumerate().map(|(i, val)| {
+                            Value::new(i as f64 / sample_rate as f64, val.0 as f64)
+                        }),
+                    ));
+                let line_filtered =
+                    Line::new(Values::from_values_iter(
+                        right.iter().chain(left).enumerate().map(|(i, val)| {
+                            Value::new(i as f64 / sample_rate as f64, val.1 as f64)
+                        }),
+                    ));
+                ui.add(
+                    Plot::new("Audio")
+                        .line(line_raw)
+                        .line(line_filtered)
+                        .view_aspect(1.0),
+                );
             }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {

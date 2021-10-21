@@ -13,6 +13,7 @@ pub struct AudioPlayer {
     pub config: cpal::SupportedStreamConfig,
     stream: Option<anyhow::Result<cpal::Stream>>,
     producer: Option<rtrb::Producer<SamplingFunction>>,
+    pub to_ui_consumer: Option<rtrb::Consumer<(f32, f32)>>,
     pub enable_band_pass_filter: Arc<AtomicBool>,
 }
 
@@ -35,6 +36,7 @@ impl AudioPlayer {
             config,
             stream: None,
             producer: None,
+            to_ui_consumer: None,
             enable_band_pass_filter: Arc::new(AtomicBool::new(true)),
         };
         audio_player.start_output_stream()?;
@@ -43,6 +45,8 @@ impl AudioPlayer {
 
     fn start_output_stream(&mut self) -> anyhow::Result<()> {
         let (producer, mut consumer) = rtrb::RingBuffer::new(2);
+        let (mut to_ui_producer, to_ui_consumer) =
+            rtrb::RingBuffer::new(self.config.sample_rate().0 as usize);
         let mut stored_sampling_function: Option<SamplingFunction> = None;
         // Exponential moving average band-pass filtering
         const ALPHA1: f32 = 0.01;
@@ -67,13 +71,19 @@ impl AudioPlayer {
             };
             moving_average1 = moving_average1 * (1.0 - ALPHA1) + value * ALPHA1;
             moving_average2 = moving_average2 * (1.0 - ALPHA2) + value * ALPHA2;
+            let filtered_value = moving_average1 - moving_average2;
+
+            // Try to push but ignore if it works or not.
+            let _ = to_ui_producer.push((value, filtered_value));
+
             if enable_band_pass_filter.load(Ordering::SeqCst) {
-                moving_average1 - moving_average2
+                filtered_value
             } else {
                 value
             }
         };
         self.producer = Some(producer);
+        self.to_ui_consumer = Some(to_ui_consumer);
         self.stream = Some(match self.config.sample_format() {
             cpal::SampleFormat::F32 => run::<f32>(
                 &self.device,

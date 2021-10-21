@@ -108,7 +108,7 @@ impl AudioPlayer {
         match &mut self.producer {
             Some(producer) => producer
                 .push(next_sample)
-                .or(Err(anyhow!("Failed to push"))),
+                .map_err(|_| anyhow!("Failed to push")),
             None => Err(anyhow!("Audio not initialized")),
         }
     }

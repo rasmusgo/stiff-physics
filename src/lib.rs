@@ -4,6 +4,7 @@
 
 mod app;
 mod audio_player;
+mod stiff_physics;
 
 pub use app::StiffPhysicsApp;
 

@@ -1,12 +1,12 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use eframe::{
-    egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke, Vec2},
+    egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke},
     epi,
 };
 use egui::plot::{Line, Plot, Value, Values};
 use hyperdual::{Float, Hyperdual};
-use nalgebra::{self, DMatrix, DVector, SVector};
+use nalgebra::{self, DMatrix, DVector, SVector, Vector2};
 
 use crate::audio_player::AudioPlayer;
 
@@ -38,9 +38,9 @@ impl<T: hyperdual::Zero + hyperdual::One + Copy + nalgebra::Scalar, const N: usi
 struct Spring {
     p1: usize,
     p2: usize,
-    length: f32,
-    k: f32,
-    d: f32,
+    length: f64,
+    k: f64,
+    d: f64,
 }
 
 const D: usize = 2;
@@ -89,8 +89,8 @@ fn spring_force<const S: usize>(
 }
 
 fn create_diff_eq_system(
-    points: &[Vec2],
-    point_masses: &[f32],
+    points: &[Vector2<f64>],
+    point_masses: &[f64],
     springs: &[Spring],
 ) -> (DMatrix<f64>, DVector<f64>) {
     assert_eq!(points.len(), point_masses.len());
@@ -149,17 +149,17 @@ fn create_diff_eq_system(
         p2_vel[0][0] = y0[block_size + p2_loc];
         p2_vel[1][0] = y0[block_size + p2_loc + 1];
 
-        let p1_mass: f64 = point_masses[spring.p1].into();
-        let p2_mass: f64 = point_masses[spring.p2].into();
+        let p1_mass = point_masses[spring.p1];
+        let p2_mass = point_masses[spring.p2];
 
         let force = spring_force(
             p1_pos,
             p1_vel,
             p2_pos,
             p2_vel,
-            spring.length.into(),
-            spring.k.into(),
-            spring.d.into(),
+            spring.length,
+            spring.k,
+            spring.d,
         );
 
         for j in 0..D {
@@ -204,9 +204,9 @@ fn create_diff_eq_system(
 pub struct StiffPhysicsApp {
     point_mass: f32,
     relaxation_iterations: usize,
-    points: Vec<Vec2>,
+    points: Vec<Vector2<f64>>,
     springs: Vec<Spring>,
-    relaxed_points: Vec<Vec2>,
+    relaxed_points: Vec<Vector2<f64>>,
     #[cfg_attr(feature = "persistence", serde(skip))]
     mat_a: DMatrix<f64>,
     #[cfg_attr(feature = "persistence", serde(skip))]
@@ -227,9 +227,17 @@ pub struct StiffPhysicsApp {
 
 impl Default for StiffPhysicsApp {
     fn default() -> Self {
-        let points = vec![vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)];
+        let points = vec![
+            Vector2::new(-0.5, 0.),
+            Vector2::new(0., 0.5),
+            Vector2::new(0.5, 0.),
+        ];
         let springs = SPRINGS.to_vec();
-        let relaxed_points = vec![vec2(-0.5, 0.), vec2(0., 0.5), vec2(0.5, 0.)];
+        let relaxed_points = vec![
+            Vector2::new(-0.5, 0.),
+            Vector2::new(0., 0.5),
+            Vector2::new(0.5, 0.),
+        ];
         assert_eq!(points.len(), relaxed_points.len());
         let num_points = points.len();
         let block_size = num_points * D;
@@ -346,7 +354,7 @@ impl epi::App for StiffPhysicsApp {
                     .text("Relaxation iterations before linearization"),
             );
 
-            let point_masses = [*point_mass].repeat(points.len());
+            let point_masses = [*point_mass as f64].repeat(points.len());
             let (mut a, y0) = create_diff_eq_system(points, &point_masses, &*springs);
 
             // Re-linearize around estimated relaxed state
@@ -358,7 +366,7 @@ impl epi::App for StiffPhysicsApp {
                         * &y0;
                 relaxed_points.clear();
                 for i in 0..points.len() {
-                    relaxed_points.push(vec2(y_relaxed[i * D] as f32, y_relaxed[i * D + 1] as f32));
+                    relaxed_points.push(Vector2::new(y_relaxed[i * D], y_relaxed[i * D + 1]));
                 }
                 a = create_diff_eq_system(relaxed_points.as_slice(), &point_masses, &*springs).0;
             }
@@ -476,7 +484,7 @@ impl epi::App for StiffPhysicsApp {
                 let mut best_norm2 = 15. * 15.;
                 let mut best_point = None;
                 for (i, &mut p) in points.iter_mut().enumerate() {
-                    let point_in_pixels = c + p * r;
+                    let point_in_pixels = c + vec2(p.x as f32, p.y as f32) * r;
                     let diff = pos - point_in_pixels;
                     let norm2 = diff.x * diff.x + diff.y * diff.y;
                     if norm2 <= best_norm2 {
@@ -485,22 +493,24 @@ impl epi::App for StiffPhysicsApp {
                     }
                 }
                 if let Some(i) = best_point {
-                    points[i] = (pos - c) / r;
+                    let p = (pos - c) / r;
+                    points[i].x = p.x as f64;
+                    points[i].y = p.y as f64;
                 }
             }
             if *enable_simulation {
                 let num_simulated_points = simulation_state.len() / 4;
-                let mut simulated_points = Vec::<Vec2>::with_capacity(num_simulated_points);
+                let mut simulated_points = Vec::<Vector2<f64>>::with_capacity(num_simulated_points);
                 for i in 0..num_simulated_points {
-                    simulated_points.push(vec2(
-                        simulation_state[i * D] as f32,
-                        simulation_state[i * D + 1] as f32,
+                    simulated_points.push(Vector2::new(
+                        simulation_state[i * D],
+                        simulation_state[i * D + 1],
                     ));
                 }
                 draw_particle_system(&simulated_points[..], &*springs, line_width, &painter, c, r);
             }
             if *relaxation_iterations > 0 {
-                draw_particle_system(relaxed_points, &*springs, line_width, &painter, c, r);
+                draw_particle_system(&relaxed_points[..], &*springs, line_width, &painter, c, r);
             }
             draw_particle_system(points, &*springs, line_width, &painter, c, r);
 
@@ -524,7 +534,7 @@ impl epi::App for StiffPhysicsApp {
 }
 
 fn draw_particle_system(
-    points: &[Vec2],
+    points: &[Vector2<f64>],
     springs: &[Spring],
     line_width: f32,
     painter: &egui::Painter,
@@ -536,14 +546,16 @@ fn draw_particle_system(
     for spring in springs {
         let p1 = points[spring.p1];
         let p2 = points[spring.p2];
-        let diff: Vec2 = p1 - p2;
-        let norm2 = diff.x * diff.x + diff.y * diff.y;
-        let stress = f32::min((spring.length - norm2.sqrt()).abs() / spring.length, 1.0);
-        let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress);
+        let diff = p1 - p2;
+        let stress = f64::min((spring.length - diff.norm()).abs() / spring.length, 1.0);
+        let line_color = egui::lerp(egui::Rgba::GREEN..=egui::Rgba::RED, stress as f32);
         let stroke = Stroke::new(line_width, line_color);
+        let p1 = vec2(p1.x as f32, p1.y as f32);
+        let p2 = vec2(p2.x as f32, p2.y as f32);
         painter.line_segment([c + p1 * r, c + p2 * r], stroke);
     }
     for &p in points {
+        let p = vec2(p.x as f32, p.y as f32);
         painter.circle_filled(c + p * r, circle_radius, color);
     }
 }

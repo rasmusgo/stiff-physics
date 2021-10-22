@@ -61,11 +61,16 @@ pub fn create_diff_eq_system(
     springs: &[Spring],
 ) -> (DMatrix<f64>, DVector<f64>) {
     assert_eq!(points.len(), point_masses.len());
+    let y0 = new_state_vector_from_points(points);
+    let mat_a = create_diff_eq_system_around_y0(&y0, point_masses, springs);
+    (mat_a, y0)
+}
+
+fn new_state_vector_from_points(points: &[Point<f64, D>]) -> DVector<f64> {
     let num_points = points.len();
     let block_size = num_points * D;
     let system_size = block_size * 2 + 1;
 
-    // Initial state
     let mut y0 = DVector::zeros(system_size);
     for i in 0..num_points {
         for j in 0..D {
@@ -73,6 +78,18 @@ pub fn create_diff_eq_system(
         }
     }
     y0[system_size - 1] = 1.0; // For transformation to homogenous system.
+    y0
+}
+
+fn create_diff_eq_system_around_y0(
+    y0: &DVector<f64>,
+    point_masses: &[f64],
+    springs: &[Spring],
+) -> DMatrix<f64> {
+    assert_eq!(y0.len(), point_masses.len() * D * 2 + 1);
+    let num_points = point_masses.len();
+    let block_size = num_points * D;
+    let system_size = block_size * 2 + 1;
 
     // Dual numbers for automatic differentiation of springs. (Spatial derivatives, not time derivatives).
     let mut p1_pos = SVector::<Hyperdual<f64, 9>, D>::new(
@@ -162,5 +179,5 @@ pub fn create_diff_eq_system(
         }
     }
 
-    (mat_a, y0)
+    mat_a
 }

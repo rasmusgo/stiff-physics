@@ -26,6 +26,9 @@ default = []
 http = ["eframe/http"] # Enable if you want to do http requests
 persistence = ["eframe/persistence", "serde"] # Enable if you want to persist app state on shutdown
 
+[profile.dev]
+opt-level = 2 # To make dissasembly closer to release
+
 [profile.release]
 opt-level = 2 # fast and small wasm
 

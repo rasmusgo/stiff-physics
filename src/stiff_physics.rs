@@ -1,5 +1,5 @@
 use hyperdual::{Float, Hyperdual};
-use nalgebra::{self, DMatrix, DVector, SVector, Vector2};
+use nalgebra::{self, DMatrix, DVector, Point, SVector};
 
 trait OneHot {
     type H;
@@ -56,7 +56,7 @@ fn spring_force<const S: usize>(
 }
 
 pub fn create_diff_eq_system(
-    points: &[Vector2<f64>],
+    points: &[Point<f64, D>],
     point_masses: &[f64],
     springs: &[Spring],
 ) -> (DMatrix<f64>, DVector<f64>) {

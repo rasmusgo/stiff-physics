@@ -8,7 +8,7 @@ use eframe::{
     epi,
 };
 use egui::plot::{Line, Plot, Value, Values};
-use nalgebra::{self, DMatrix, DVector, Vector2};
+use nalgebra::{self, DMatrix, DVector, Point2};
 
 use crate::audio_player::AudioPlayer;
 use crate::stiff_physics::{create_diff_eq_system, Spring, D};
@@ -43,9 +43,9 @@ const SPRINGS: [Spring; 3] = [
 pub struct StiffPhysicsApp {
     point_mass: f32,
     relaxation_iterations: usize,
-    points: Vec<Vector2<f64>>,
+    points: Vec<Point2<f64>>,
     springs: Vec<Spring>,
-    relaxed_points: Vec<Vector2<f64>>,
+    relaxed_points: Vec<Point2<f64>>,
     #[cfg_attr(feature = "persistence", serde(skip))]
     mat_a: DMatrix<f64>,
     #[cfg_attr(feature = "persistence", serde(skip))]
@@ -67,15 +67,15 @@ pub struct StiffPhysicsApp {
 impl Default for StiffPhysicsApp {
     fn default() -> Self {
         let points = vec![
-            Vector2::new(-0.5, 0.),
-            Vector2::new(0., 0.5),
-            Vector2::new(0.5, 0.),
+            Point2::new(-0.5, 0.),
+            Point2::new(0., 0.5),
+            Point2::new(0.5, 0.),
         ];
         let springs = SPRINGS.to_vec();
         let relaxed_points = vec![
-            Vector2::new(-0.5, 0.),
-            Vector2::new(0., 0.5),
-            Vector2::new(0.5, 0.),
+            Point2::new(-0.5, 0.),
+            Point2::new(0., 0.5),
+            Point2::new(0.5, 0.),
         ];
         assert_eq!(points.len(), relaxed_points.len());
         let num_points = points.len();
@@ -205,7 +205,7 @@ impl epi::App for StiffPhysicsApp {
                         * &y0;
                 relaxed_points.clear();
                 for i in 0..points.len() {
-                    relaxed_points.push(Vector2::new(y_relaxed[i * D], y_relaxed[i * D + 1]));
+                    relaxed_points.push(Point2::new(y_relaxed[i * D], y_relaxed[i * D + 1]));
                 }
                 a = create_diff_eq_system(relaxed_points.as_slice(), &point_masses, &*springs).0;
             }
@@ -340,9 +340,9 @@ impl epi::App for StiffPhysicsApp {
             }
             if *enable_simulation {
                 let num_simulated_points = simulation_state.len() / 4;
-                let mut simulated_points = Vec::<Vector2<f64>>::with_capacity(num_simulated_points);
+                let mut simulated_points = Vec::<Point2<f64>>::with_capacity(num_simulated_points);
                 for i in 0..num_simulated_points {
-                    simulated_points.push(Vector2::new(
+                    simulated_points.push(Point2::new(
                         simulation_state[i * D],
                         simulation_state[i * D + 1],
                     ));
@@ -374,7 +374,7 @@ impl epi::App for StiffPhysicsApp {
 }
 
 fn draw_particle_system(
-    points: &[Vector2<f64>],
+    points: &[Point2<f64>],
     springs: &[Spring],
     line_width: f32,
     painter: &egui::Painter,

@@ -1,4 +1,7 @@
-use std::sync::{atomic::Ordering, Arc};
+use std::{
+    mem,
+    sync::{atomic::Ordering, Arc},
+};
 
 use eframe::{
     egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke},
@@ -402,11 +405,12 @@ impl epi::App for StiffPhysicsApp {
 
                     // Produce a waveform by advancing the simulation.
                     let mut y = simulation_state.clone();
+                    let mut y_next = simulation_state.clone();
                     let mut fade = 0.0;
                     let next_sample = move || {
-                        let y_next = &exp_a_audio_step * &y;
+                        y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
                         let value = fade * ((y_next[D] - y[D]) as f32);
-                        y = y_next;
+                        mem::swap(&mut y, &mut y_next);
                         if fade < 1.0 {
                             fade = 1.0.min(fade + fade_in_rate);
                         }

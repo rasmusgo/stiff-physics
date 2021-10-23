@@ -44,8 +44,10 @@ const SPRINGS: [Spring; 3] = [
 #[cfg_attr(feature = "persistence", serde(default))] // if we add new fields, give them default values when deserializing old state
 pub struct StiffPhysicsApp {
     point_mass: f32,
+    #[cfg_attr(feature = "persistence", serde(skip))]
     points: Vec<Point2<f64>>,
     springs: Vec<Spring>,
+    #[cfg_attr(feature = "persistence", serde(skip))]
     relaxed_points: Vec<Point2<f64>>,
     #[cfg_attr(feature = "persistence", serde(skip))]
     simulation_state: DVector<f64>,

@@ -55,18 +55,7 @@ fn spring_force<const S: usize>(
     spring_dir * -force_magnitude
 }
 
-pub fn create_diff_eq_system(
-    points: &[Point<f64, D>],
-    point_masses: &[f64],
-    springs: &[Spring],
-) -> (DMatrix<f64>, DVector<f64>) {
-    assert_eq!(points.len(), point_masses.len());
-    let y0 = new_state_vector_from_points(points);
-    let mat_a = create_diff_eq_system_around_y0(&y0, point_masses, springs);
-    (mat_a, y0)
-}
-
-fn new_state_vector_from_points(points: &[Point<f64, D>]) -> DVector<f64> {
+pub fn new_state_vector_from_points(points: &[Point<f64, D>]) -> DVector<f64> {
     let num_points = points.len();
     let block_size = num_points * D;
     let system_size = block_size * 2 + 1;
@@ -81,7 +70,7 @@ fn new_state_vector_from_points(points: &[Point<f64, D>]) -> DVector<f64> {
     y0
 }
 
-fn create_diff_eq_system_around_y0(
+pub fn create_diff_eq_system_around_y0(
     y0: &DVector<f64>,
     point_masses: &[f64],
     springs: &[Spring],

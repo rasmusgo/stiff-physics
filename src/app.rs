@@ -10,8 +10,10 @@ use eframe::{
 use egui::plot::{Line, Plot, Value, Values};
 use nalgebra::{self, DMatrix, DVector, Point2};
 
-use crate::audio_player::AudioPlayer;
-use crate::stiff_physics::{create_diff_eq_system, Spring, D};
+use crate::{
+    audio_player::AudioPlayer,
+    stiff_physics::{create_diff_eq_system_around_y0, new_state_vector_from_points, Spring, D},
+};
 
 const SPRINGS: [Spring; 3] = [
     Spring {
@@ -42,12 +44,9 @@ const SPRINGS: [Spring; 3] = [
 #[cfg_attr(feature = "persistence", serde(default))] // if we add new fields, give them default values when deserializing old state
 pub struct StiffPhysicsApp {
     point_mass: f32,
-    relaxation_iterations: usize,
     points: Vec<Point2<f64>>,
     springs: Vec<Spring>,
     relaxed_points: Vec<Point2<f64>>,
-    #[cfg_attr(feature = "persistence", serde(skip))]
-    mat_a: DMatrix<f64>,
     #[cfg_attr(feature = "persistence", serde(skip))]
     simulation_state: DVector<f64>,
     #[cfg_attr(feature = "persistence", serde(skip))]
@@ -84,11 +83,9 @@ impl Default for StiffPhysicsApp {
 
         Self {
             point_mass: 0.001,
-            relaxation_iterations: 1,
             points,
             springs,
             relaxed_points,
-            mat_a: DMatrix::zeros(system_size, system_size),
             simulation_state: DVector::zeros(system_size),
             exp_a_sim_step: DMatrix::zeros(system_size, system_size),
             exp_a_audio_step: DMatrix::zeros(system_size, system_size),
@@ -132,11 +129,9 @@ impl epi::App for StiffPhysicsApp {
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
         let Self {
             point_mass,
-            relaxation_iterations,
             points,
             springs,
             relaxed_points,
-            mat_a,
             simulation_state,
             exp_a_sim_step,
             exp_a_audio_step,
@@ -179,40 +174,17 @@ impl epi::App for StiffPhysicsApp {
 
             if ui.button("Store as relaxed").clicked() {
                 for spring in &mut *springs {
-                    let p1 = points[spring.p1];
-                    let p2 = points[spring.p2];
-                    let diff = p1 - p2;
-                    let norm2 = diff.x * diff.x + diff.y * diff.y;
-                    spring.length = norm2.sqrt();
+                    spring.length = (points[spring.p1] - points[spring.p2]).norm();
                 }
                 *relaxed_points = points.clone();
             }
 
-            ui.add(
-                egui::Slider::new(relaxation_iterations, 0..=10)
-                    .text("Relaxation iterations before linearization"),
-            );
-
-            let point_masses = [*point_mass as f64].repeat(points.len());
-            let (mut a, y0) = create_diff_eq_system(points, &point_masses, &*springs);
-
-            // Re-linearize around estimated relaxed state
-            for _i in 0..*relaxation_iterations {
-                // Solve for zero velocity, zero acceleration and minimal distance to y0 (TODO: weighted by mass)
-                // https://math.stackexchange.com/questions/1318637/projection-of-a-vector-onto-the-null-space-of-a-matrix
-                let y_relaxed = &y0
-                    - &a.tr_mul(&((&a * &a.transpose()).pseudo_inverse(1.0e-10).unwrap() * &a))
-                        * &y0;
-                relaxed_points.clear();
-                for i in 0..points.len() {
-                    relaxed_points.push(Point2::new(y_relaxed[i * D], y_relaxed[i * D + 1]));
-                }
-                a = create_diff_eq_system(relaxed_points.as_slice(), &point_masses, &*springs).0;
-            }
-            *mat_a = a;
-
             if ui.button("Simulate").clicked() {
-                *simulation_state = y0;
+                let point_masses = [*point_mass as f64].repeat(points.len());
+                let y0 = new_state_vector_from_points(relaxed_points);
+                let mat_a = create_diff_eq_system_around_y0(&y0, &point_masses, springs);
+                let p0_vel_loc = points.len() * D;
+                *simulation_state = new_state_vector_from_points(points);
                 *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
                 *exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
                 *enable_simulation = true;
@@ -220,7 +192,6 @@ impl epi::App for StiffPhysicsApp {
                 // println!("{:?}", &*mat_a * &*simulation_state);
 
                 // Generate audio to find max_value for normalization
-                let p0_vel_loc = points.len() * D;
                 let mut y = simulation_state.clone();
                 let mut max_value: f32 = 0.0;
                 for _i in 0..44100 * 3 {
@@ -237,7 +208,7 @@ impl epi::App for StiffPhysicsApp {
                 }
                 if let Some(Ok(player)) = audio_player_ref.as_mut() {
                     let sample_rate = player.config.sample_rate().0 as f64;
-                    let exp_a_audio_step = (mat_a.clone() / sample_rate).exp();
+                    let exp_a_audio_step = (mat_a / sample_rate).exp();
                     let fade_in_rate = 50.0 / sample_rate as f32;
 
                     // Produce a waveform by advancing the simulation.
@@ -350,9 +321,7 @@ impl epi::App for StiffPhysicsApp {
                 }
                 draw_particle_system(&simulated_points[..], &*springs, line_width, &painter, c, r);
             }
-            if *relaxation_iterations > 0 {
-                draw_particle_system(&relaxed_points[..], &*springs, line_width, &painter, c, r);
-            }
+            draw_particle_system(&relaxed_points[..], &*springs, line_width, &painter, c, r);
             draw_particle_system(points, &*springs, line_width, &painter, c, r);
 
             ui.hyperlink("https://github.com/rasmusgo/stiff-physics");

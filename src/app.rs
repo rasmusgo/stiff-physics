@@ -17,21 +17,21 @@ const SPRINGS: [Spring; 3] = [
     Spring {
         p1: 0,
         p2: 1,
-        length: 0.5,
+        length: 1.0,
         k: 1000.0,
         d: 0.1,
     },
     Spring {
         p1: 1,
         p2: 2,
-        length: 0.5,
+        length: 1.0,
         k: 1000.0,
         d: 0.1,
     },
     Spring {
         p1: 2,
         p2: 0,
-        length: 0.5,
+        length: 1.0,
         k: 1000.0,
         d: 0.1,
     },
@@ -67,15 +67,15 @@ pub struct StiffPhysicsApp {
 impl Default for StiffPhysicsApp {
     fn default() -> Self {
         let points = vec![
-            Point2::new(-0.5, 0.),
-            Point2::new(0., 0.5),
-            Point2::new(0.5, 0.),
+            Point2::new(-0.6, 0.2),
+            Point2::new(0., -(0.75_f64.sqrt()) + 0.2),
+            Point2::new(0.6, 0.2),
         ];
         let springs = SPRINGS.to_vec();
         let relaxed_points = vec![
-            Point2::new(-0.5, 0.),
-            Point2::new(0., 0.5),
-            Point2::new(0.5, 0.),
+            Point2::new(-0.5, 0.2),
+            Point2::new(0.0, -(0.75_f64.sqrt()) + 0.2),
+            Point2::new(0.5, 0.2),
         ];
         assert_eq!(points.len(), relaxed_points.len());
         let num_points = points.len();

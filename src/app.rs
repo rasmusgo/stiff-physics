@@ -220,11 +220,12 @@ impl epi::App for StiffPhysicsApp {
                 // println!("{:?}", &*mat_a * &*simulation_state);
 
                 // Generate audio to find max_value for normalization
+                let p0_vel_loc = points.len() * D;
                 let mut y = simulation_state.clone();
                 let mut max_value: f32 = 0.0;
                 for _i in 0..44100 * 3 {
                     let y_next = &*exp_a_audio_step * &y;
-                    let value = (y_next[D] - y[D]) as f32;
+                    let value = (y_next[p0_vel_loc] - y[p0_vel_loc]) as f32;
                     max_value = f32::max(max_value, value.abs());
                     y = y_next;
                 }
@@ -245,7 +246,7 @@ impl epi::App for StiffPhysicsApp {
                     let mut fade = 0.0;
                     let next_sample = move || {
                         y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
-                        let value = fade * ((y_next[D] - y[D]) as f32);
+                        let value = fade * ((y_next[p0_vel_loc] - y[p0_vel_loc]) as f32);
                         mem::swap(&mut y, &mut y_next);
                         if fade < 1.0 {
                             fade = (fade + fade_in_rate).min(1.0);

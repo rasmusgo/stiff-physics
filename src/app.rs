@@ -172,12 +172,17 @@ impl epi::App for StiffPhysicsApp {
             }
             ui.add(egui::Slider::new(point_mass, 0.01..=10.0).text("point_mass"));
 
-            if ui.button("Store as relaxed").clicked() {
-                for spring in &mut *springs {
-                    spring.length = (points[spring.p1] - points[spring.p2]).norm();
+            ui.horizontal(|ui| {
+                if ui.button("Store as relaxed").clicked() {
+                    for spring in &mut *springs {
+                        spring.length = (points[spring.p1] - points[spring.p2]).norm();
+                    }
+                    *relaxed_points = points.clone();
                 }
-                *relaxed_points = points.clone();
-            }
+                if ui.button("Load relaxed").clicked() {
+                    *points = relaxed_points.clone();
+                }
+            });
 
             if ui.button("Simulate").clicked() {
                 let point_masses = [*point_mass as f64].repeat(points.len());

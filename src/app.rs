@@ -20,21 +20,21 @@ const SPRINGS: [Spring; 3] = [
         p1: 0,
         p2: 1,
         length: 1.0,
-        k: 1000.0,
+        k: 500.0,
         d: 0.1,
     },
     Spring {
         p1: 1,
         p2: 2,
         length: 1.0,
-        k: 1000.0,
+        k: 5000.0,
         d: 0.1,
     },
     Spring {
         p1: 2,
         p2: 0,
         length: 1.0,
-        k: 1000.0,
+        k: 200.0,
         d: 0.1,
     },
 ];
@@ -77,7 +77,7 @@ impl Default for StiffPhysicsApp {
         let (state_vector_producer, state_vector_consumer) = rtrb::RingBuffer::new(1);
 
         Self {
-            point_mass: 0.001,
+            point_mass: 0.01,
             points,
             springs,
             relaxed_points,

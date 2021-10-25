@@ -51,6 +51,8 @@ pub struct StiffPhysicsApp {
     pub audio_player: Arc<Mutex<Option<anyhow::Result<AudioPlayer>>>>,
     audio_history: Vec<(f32, f32)>,
     audio_history_index: usize,
+    state_vector_producer: rtrb::Producer<DVector<f64>>,
+    state_vector_consumer: rtrb::Consumer<DVector<f64>>,
 }
 
 impl Default for StiffPhysicsApp {
@@ -71,6 +73,9 @@ impl Default for StiffPhysicsApp {
         let block_size = num_points * D;
         let system_size = block_size * 2 + 1;
 
+        // Dummy short-circuit producer/consumer
+        let (state_vector_producer, state_vector_consumer) = rtrb::RingBuffer::new(1);
+
         Self {
             point_mass: 0.001,
             points,
@@ -83,6 +88,8 @@ impl Default for StiffPhysicsApp {
             audio_player: Default::default(),
             audio_history: Vec::new(),
             audio_history_index: 0,
+            state_vector_producer,
+            state_vector_consumer,
         }
     }
 }
@@ -116,6 +123,8 @@ impl epi::App for StiffPhysicsApp {
             audio_player,
             audio_history,
             audio_history_index,
+            state_vector_producer,
+            state_vector_consumer,
         } = self;
 
         // Examples of how to create different panels and windows.
@@ -135,8 +144,13 @@ impl epi::App for StiffPhysicsApp {
         // });
 
         if *enable_simulation {
-            // Advance simulation
-            *simulation_state = &*exp_a_sim_step * &*simulation_state;
+            // Get updated simulation state from the audio thread.
+            if let Ok(state_storage) = state_vector_consumer.pop() {
+                // Pass back the old vector so that the audio thread doesn't need to allocate.
+                state_vector_producer
+                    .push(mem::replace(simulation_state, state_storage))
+                    .unwrap();
+            }
             ctx.request_repaint();
         }
 
@@ -183,6 +197,30 @@ impl epi::App for StiffPhysicsApp {
                     y = y_next;
                 }
 
+                // Create communication channel to send back simulation state to UI.
+                //      UI thread               Audio thread
+                //      ---------               ------------
+                //  Allocate state vector            .
+                //         |                         .
+                // to_audio_producer -------> to_audio_consumer
+                //         .                         |
+                //         .               Swap with up to date vector
+                //         .                         |
+                //   to_ui_consumer <--------- to_ui_producer
+                //         |                         .
+                //    Draw graphics                  .
+                let (to_audio_producer, mut to_audio_consumer) = rtrb::RingBuffer::new(1);
+                let (mut to_ui_producer, to_ui_consumer) = rtrb::RingBuffer::new(1);
+
+                // Store these so we can communicate with the audio thread.
+                *state_vector_producer = to_audio_producer;
+                *state_vector_consumer = to_ui_consumer;
+
+                // Create some state vector storage to pass back and forth.
+                state_vector_producer
+                    .push(simulation_state.clone())
+                    .unwrap();
+
                 // Send audio generator functor to audio player
                 let mut audio_player_ref = audio_player.lock();
                 if audio_player_ref.is_none() {
@@ -203,6 +241,13 @@ impl epi::App for StiffPhysicsApp {
                         mem::swap(&mut y, &mut y_next);
                         if fade < 1.0 {
                             fade = (fade + fade_in_rate).min(1.0);
+                        }
+                        if !to_ui_producer.is_full() {
+                            if let Ok(mut state_storage) = to_audio_consumer.pop() {
+                                // Put an (almost) up to state vector in the provided storage and send it back.
+                                mem::swap(&mut state_storage, &mut y_next);
+                                to_ui_producer.push(state_storage).unwrap();
+                            }
                         }
                         value / max_value
                     };

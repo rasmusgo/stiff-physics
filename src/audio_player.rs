@@ -115,7 +115,7 @@ impl AudioPlayer {
     pub fn play_audio(&mut self, next_sample: SamplingFunction) -> anyhow::Result<()> {
         if let Some(disposal_queue) = &mut self.disposal_queue_consumer {
             // Old sampling functions are implicitly dropped here.
-            while let Ok(_) = disposal_queue.pop() {}
+            while disposal_queue.pop().is_ok() {}
         }
         match &mut self.sampling_function_producer {
             Some(producer) => producer

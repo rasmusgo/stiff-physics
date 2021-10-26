@@ -12,7 +12,8 @@ pub struct AudioPlayer {
     device: cpal::Device,
     pub config: cpal::SupportedStreamConfig,
     stream: Option<anyhow::Result<cpal::Stream>>,
-    producer: Option<rtrb::Producer<SamplingFunction>>,
+    sampling_function_producer: Option<rtrb::Producer<SamplingFunction>>,
+    disposal_queue_consumer: Option<rtrb::Consumer<SamplingFunction>>,
     pub to_ui_consumer: Option<rtrb::Consumer<(f32, f32)>>,
     pub enable_band_pass_filter: Arc<AtomicBool>,
 }
@@ -35,7 +36,8 @@ impl AudioPlayer {
             device,
             config,
             stream: None,
-            producer: None,
+            sampling_function_producer: None,
+            disposal_queue_consumer: None,
             to_ui_consumer: None,
             enable_band_pass_filter: Arc::new(AtomicBool::new(true)),
         };
@@ -44,7 +46,8 @@ impl AudioPlayer {
     }
 
     fn start_output_stream(&mut self) -> anyhow::Result<()> {
-        let (producer, mut consumer) = rtrb::RingBuffer::new(2);
+        let (mut disposal_queue_producer, disposal_queue_consumer) = rtrb::RingBuffer::new(2);
+        let (sampling_function_producer, mut sampling_function_consumer) = rtrb::RingBuffer::new(2);
         let (mut to_ui_producer, to_ui_consumer) =
             rtrb::RingBuffer::new(self.config.sample_rate().0 as usize);
         let mut stored_sampling_function: Option<SamplingFunction> = None;
@@ -55,8 +58,12 @@ impl AudioPlayer {
         let mut moving_average2 = 0_f32;
         let enable_band_pass_filter = self.enable_band_pass_filter.clone();
         let next_sample = move || {
-            if let Ok(new_sampling_function) = consumer.pop() {
-                stored_sampling_function = Some(new_sampling_function);
+            if let Ok(new_sampling_function) = sampling_function_consumer.pop() {
+                if let Some(old_sampling_function) =
+                    std::mem::replace(&mut stored_sampling_function, Some(new_sampling_function))
+                {
+                    disposal_queue_producer.push(old_sampling_function).unwrap();
+                }
             }
 
             let value = if let Some(sampling_function) = &mut stored_sampling_function {
@@ -82,7 +89,8 @@ impl AudioPlayer {
                 value
             }
         };
-        self.producer = Some(producer);
+        self.disposal_queue_consumer = Some(disposal_queue_consumer);
+        self.sampling_function_producer = Some(sampling_function_producer);
         self.to_ui_consumer = Some(to_ui_consumer);
         self.stream = Some(match self.config.sample_format() {
             cpal::SampleFormat::F32 => run::<f32>(
@@ -105,7 +113,11 @@ impl AudioPlayer {
     }
 
     pub fn play_audio(&mut self, next_sample: SamplingFunction) -> anyhow::Result<()> {
-        match &mut self.producer {
+        if let Some(disposal_queue) = &mut self.disposal_queue_consumer {
+            // Old sampling functions are implicitly dropped here.
+            while let Ok(_) = disposal_queue.pop() {}
+        }
+        match &mut self.sampling_function_producer {
             Some(producer) => producer
                 .push(next_sample)
                 .map_err(|_| anyhow!("Failed to push")),

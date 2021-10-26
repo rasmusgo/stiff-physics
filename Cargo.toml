@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 anyhow = "1.0.44"
 cpal = { version = "0.13.4", features = ["wasm-bindgen"] }
-eframe = "0.14.0" # Gives us egui, epi and web+native backends
+eframe = "0.15.0" # Gives us egui, epi and web+native backends
 hyperdual = "0.5.0"
 nalgebra = "0.29"
 rtrb = "0.2.0"
@@ -23,7 +23,6 @@ web-sys = { version = "0.3.55", features = ["EventTarget"] }
 
 [features]
 default = []
-http = ["eframe/http"] # Enable if you want to do http requests
 persistence = ["eframe/persistence", "serde"] # Enable if you want to persist app state on shutdown
 
 [profile.dev]

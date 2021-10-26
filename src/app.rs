@@ -280,23 +280,31 @@ impl epi::App for StiffPhysicsApp {
                 }
 
                 let (left, right) = audio_history.split_at(*audio_history_index);
-                let line_raw =
-                    Line::new(Values::from_values_iter(
-                        right.iter().chain(left).enumerate().map(|(i, val)| {
-                            Value::new(i as f64 / sample_rate as f64, val.0 as f64)
-                        }),
-                    ));
-                let line_filtered =
-                    Line::new(Values::from_values_iter(
-                        right.iter().chain(left).enumerate().map(|(i, val)| {
-                            Value::new(i as f64 / sample_rate as f64, val.1 as f64)
-                        }),
-                    ));
+                let line_raw = Line::new(Values::from_values_iter(
+                    right.iter().chain(left).enumerate().map(|(i, val)| {
+                        Value::new(
+                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                            val.0 as f64,
+                        )
+                    }),
+                ));
+                let line_filtered = Line::new(Values::from_values_iter(
+                    right.iter().chain(left).enumerate().map(|(i, val)| {
+                        Value::new(
+                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                            val.1 as f64,
+                        )
+                    }),
+                ));
                 ui.add(
                     Plot::new("Audio")
                         .line(line_raw)
                         .line(line_filtered)
-                        .view_aspect(1.0),
+                        .view_aspect(1.0)
+                        .include_x(-1.0)
+                        .include_x(0.0)
+                        .include_y(-1.0)
+                        .include_y(1.0),
                 );
             }
 
@@ -346,7 +354,14 @@ impl epi::App for StiffPhysicsApp {
                         simulation_state[i * D + 1],
                     ));
                 }
-                draw_particle_system(&simulated_points[..], &*springs, line_width, &painter, c, r);
+                draw_particle_system(
+                    &simulated_points[..],
+                    &*springs,
+                    line_width * 3.0,
+                    &painter,
+                    c,
+                    r,
+                );
             }
             draw_particle_system(&relaxed_points[..], &*springs, line_width, &painter, c, r);
             draw_particle_system(points, &*springs, line_width, &painter, c, r);

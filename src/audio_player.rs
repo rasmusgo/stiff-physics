@@ -83,7 +83,7 @@ impl AudioPlayer {
             // Try to push but ignore if it works or not.
             let _ = to_ui_producer.push((value, filtered_value));
 
-            if enable_band_pass_filter.load(Ordering::SeqCst) {
+            if enable_band_pass_filter.load(Ordering::Relaxed) {
                 filtered_value
             } else {
                 value

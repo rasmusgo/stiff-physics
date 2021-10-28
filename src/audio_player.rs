@@ -48,49 +48,10 @@ impl AudioPlayer {
 
     fn start_output_stream(&mut self) -> anyhow::Result<()> {
         puffin::profile_function!();
-        let (mut disposal_queue_producer, disposal_queue_consumer) = rtrb::RingBuffer::new(2);
-        let (sampling_function_producer, mut sampling_function_consumer) = rtrb::RingBuffer::new(2);
-        let (mut to_ui_producer, to_ui_consumer) =
+        let (disposal_queue_producer, disposal_queue_consumer) = rtrb::RingBuffer::new(2);
+        let (sampling_function_producer, sampling_function_consumer) = rtrb::RingBuffer::new(2);
+        let (to_ui_producer, to_ui_consumer) =
             rtrb::RingBuffer::new(self.config.sample_rate().0 as usize);
-        let mut stored_sampling_function: Option<SamplingFunction> = None;
-        // Exponential moving average band-pass filtering
-        const ALPHA1: f32 = 0.01;
-        const ALPHA2: f32 = 0.001;
-        let mut moving_average1 = 0_f32;
-        let mut moving_average2 = 0_f32;
-        let enable_band_pass_filter = self.enable_band_pass_filter.clone();
-        let next_sample = move || {
-            if let Ok(new_sampling_function) = sampling_function_consumer.pop() {
-                if let Some(old_sampling_function) =
-                    std::mem::replace(&mut stored_sampling_function, Some(new_sampling_function))
-                {
-                    disposal_queue_producer.push(old_sampling_function).unwrap();
-                }
-            }
-
-            let value = if let Some(sampling_function) = &mut stored_sampling_function {
-                let sample = sampling_function();
-                if sample.is_finite() {
-                    sample
-                } else {
-                    0_f32
-                }
-            } else {
-                0_f32
-            };
-            moving_average1 = moving_average1 * (1.0 - ALPHA1) + value * ALPHA1;
-            moving_average2 = moving_average2 * (1.0 - ALPHA2) + value * ALPHA2;
-            let filtered_value = moving_average1 - moving_average2;
-
-            // Try to push but ignore if it works or not.
-            let _ = to_ui_producer.push((value, filtered_value));
-
-            if enable_band_pass_filter.load(Ordering::Relaxed) {
-                filtered_value
-            } else {
-                value
-            }
-        };
         self.disposal_queue_consumer = Some(disposal_queue_consumer);
         self.sampling_function_producer = Some(sampling_function_producer);
         self.to_ui_consumer = Some(to_ui_consumer);
@@ -98,17 +59,26 @@ impl AudioPlayer {
             cpal::SampleFormat::F32 => run::<f32>(
                 &self.device,
                 &self.config.clone().into(),
-                Box::new(next_sample),
+                self.enable_band_pass_filter.clone(),
+                sampling_function_consumer,
+                disposal_queue_producer,
+                to_ui_producer,
             ),
             cpal::SampleFormat::I16 => run::<i16>(
                 &self.device,
                 &self.config.clone().into(),
-                Box::new(next_sample),
+                self.enable_band_pass_filter.clone(),
+                sampling_function_consumer,
+                disposal_queue_producer,
+                to_ui_producer,
             ),
             cpal::SampleFormat::U16 => run::<u16>(
                 &self.device,
                 &self.config.clone().into(),
-                Box::new(next_sample),
+                self.enable_band_pass_filter.clone(),
+                sampling_function_consumer,
+                disposal_queue_producer,
+                to_ui_producer,
             ),
         });
         Ok(())
@@ -132,7 +102,10 @@ impl AudioPlayer {
 pub fn run<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    mut next_sample: SamplingFunction,
+    enable_band_pass_filter: Arc<AtomicBool>,
+    mut sampling_function_consumer: rtrb::Consumer<SamplingFunction>,
+    mut disposal_queue_producer: rtrb::Producer<SamplingFunction>,
+    mut to_ui_producer: rtrb::Producer<(f32, f32)>,
 ) -> anyhow::Result<cpal::Stream>
 where
     T: cpal::Sample,
@@ -141,26 +114,61 @@ where
     let channels = config.channels as usize;
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
 
+    let mut stored_sampling_function: Option<SamplingFunction> = None;
+
+    // Exponential moving average band-pass filtering
+    const ALPHA1: f32 = 0.01;
+    const ALPHA2: f32 = 0.001;
+    let mut moving_average1 = 0_f32;
+    let mut moving_average2 = 0_f32;
+
+    puffin::profile_function!();
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             puffin::profile_function!();
-            write_data(data, channels, &mut next_sample)
+            if let Ok(new_sampling_function) = sampling_function_consumer.pop() {
+                if let Some(old_sampling_function) =
+                    std::mem::replace(&mut stored_sampling_function, Some(new_sampling_function))
+                {
+                    disposal_queue_producer.push(old_sampling_function).unwrap();
+                }
+            }
+
+            let mut next_sample = || {
+                let value = if let Some(sampling_function) = &mut stored_sampling_function {
+                    let sample = sampling_function();
+                    if sample.is_finite() {
+                        sample
+                    } else {
+                        0_f32
+                    }
+                } else {
+                    0_f32
+                };
+                moving_average1 = moving_average1 * (1.0 - ALPHA1) + value * ALPHA1;
+                moving_average2 = moving_average2 * (1.0 - ALPHA2) + value * ALPHA2;
+                let filtered_value = moving_average1 - moving_average2;
+
+                // Try to push but ignore if it works or not.
+                let _ = to_ui_producer.push((value, filtered_value));
+
+                if enable_band_pass_filter.load(Ordering::Relaxed) {
+                    filtered_value
+                } else {
+                    value
+                }
+            };
+
+            for frame in data.chunks_mut(channels) {
+                let value: T = cpal::Sample::from::<f32>(&next_sample());
+                for sample in frame.iter_mut() {
+                    *sample = value;
+                }
+            }
         },
         err_fn,
     )?;
     stream.play()?;
     Ok(stream)
-}
-
-fn write_data<T>(output: &mut [T], channels: usize, next_sample: &mut dyn FnMut() -> f32)
-where
-    T: cpal::Sample,
-{
-    for frame in output.chunks_mut(channels) {
-        let value: T = cpal::Sample::from::<f32>(&next_sample());
-        for sample in frame.iter_mut() {
-            *sample = value;
-        }
-    }
 }

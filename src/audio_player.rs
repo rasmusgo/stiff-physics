@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 
@@ -16,6 +16,7 @@ pub struct AudioPlayer {
     disposal_queue_consumer: Option<rtrb::Consumer<SamplingFunction>>,
     pub to_ui_consumer: Option<rtrb::Consumer<(f32, f32)>>,
     pub enable_band_pass_filter: Arc<AtomicBool>,
+    pub num_frames_per_callback: Arc<AtomicUsize>,
 }
 
 impl AudioPlayer {
@@ -41,6 +42,7 @@ impl AudioPlayer {
             disposal_queue_consumer: None,
             to_ui_consumer: None,
             enable_band_pass_filter: Arc::new(AtomicBool::new(true)),
+            num_frames_per_callback: Arc::new(AtomicUsize::new(0)),
         };
         audio_player.start_output_stream()?;
         Ok(audio_player)
@@ -63,6 +65,7 @@ impl AudioPlayer {
                 sampling_function_consumer,
                 disposal_queue_producer,
                 to_ui_producer,
+                self.num_frames_per_callback.clone(),
             ),
             cpal::SampleFormat::I16 => run::<i16>(
                 &self.device,
@@ -71,6 +74,7 @@ impl AudioPlayer {
                 sampling_function_consumer,
                 disposal_queue_producer,
                 to_ui_producer,
+                self.num_frames_per_callback.clone(),
             ),
             cpal::SampleFormat::U16 => run::<u16>(
                 &self.device,
@@ -79,6 +83,7 @@ impl AudioPlayer {
                 sampling_function_consumer,
                 disposal_queue_producer,
                 to_ui_producer,
+                self.num_frames_per_callback.clone(),
             ),
         });
         Ok(())
@@ -106,6 +111,7 @@ pub fn run<T>(
     mut sampling_function_consumer: rtrb::Consumer<SamplingFunction>,
     mut disposal_queue_producer: rtrb::Producer<SamplingFunction>,
     mut to_ui_producer: rtrb::Producer<(f32, f32)>,
+    num_frames_per_callback: Arc<AtomicUsize>,
 ) -> anyhow::Result<cpal::Stream>
 where
     T: cpal::Sample,
@@ -134,6 +140,9 @@ where
                     disposal_queue_producer.push(old_sampling_function).unwrap();
                 }
             }
+
+            // Report num_frames_per_callback
+            num_frames_per_callback.store(data.len() / channels, Ordering::Relaxed);
 
             let mut next_sample = || {
                 let value = if let Some(sampling_function) = &mut stored_sampling_function {

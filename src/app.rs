@@ -348,6 +348,13 @@ impl epi::App for StiffPhysicsApp {
                         .include_y(-1.0)
                         .include_y(1.0),
                 );
+                let num_samples = player.num_frames_per_callback.load(Ordering::Relaxed);
+                ui.label(format!(
+                    "{:?} samples = {:.3} ms = {:.2} hz",
+                    num_samples,
+                    1000.0 * (num_samples as f32) / (player.config.sample_rate().0 as f32),
+                    (player.config.sample_rate().0 as f32) / (num_samples as f32),
+                ));
             }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {

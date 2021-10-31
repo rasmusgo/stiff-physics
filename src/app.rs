@@ -54,6 +54,7 @@ pub struct StiffPhysicsApp {
     audio_history_resolution: usize,
     state_vector_producer: rtrb::Producer<DVector<f64>>,
     state_vector_consumer: rtrb::Consumer<DVector<f64>>,
+    grabbed_point: Option<usize>,
 }
 
 impl Default for StiffPhysicsApp {
@@ -92,6 +93,7 @@ impl Default for StiffPhysicsApp {
             audio_history_resolution: 1000,
             state_vector_producer,
             state_vector_consumer,
+            grabbed_point: None,
         }
     }
 }
@@ -128,6 +130,7 @@ impl epi::App for StiffPhysicsApp {
             audio_history_resolution,
             state_vector_producer,
             state_vector_consumer,
+            grabbed_point,
         } = self;
 
         // Examples of how to create different panels and windows.
@@ -343,18 +346,22 @@ impl epi::App for StiffPhysicsApp {
             let line_width = f32::max(r / 500., 1.0);
 
             if let Some(pos) = response.interact_pointer_pos() {
-                let mut best_norm2 = 15. * 15.;
-                let mut best_point = None;
-                for (i, &mut p) in points.iter_mut().enumerate() {
-                    let point_in_pixels = c + vec2(p.x as f32, p.y as f32) * r;
-                    let diff = pos - point_in_pixels;
-                    let norm2 = diff.x * diff.x + diff.y * diff.y;
-                    if norm2 <= best_norm2 {
-                        best_norm2 = norm2;
-                        best_point = Some(i);
+                if response.drag_started() {
+                    let mut best_norm2 = 15. * 15.;
+                    for (i, &mut p) in points.iter_mut().enumerate() {
+                        let point_in_pixels = c + vec2(p.x as f32, p.y as f32) * r;
+                        let diff = pos - point_in_pixels;
+                        let norm2 = diff.x * diff.x + diff.y * diff.y;
+                        if norm2 <= best_norm2 {
+                            best_norm2 = norm2;
+                            *grabbed_point = Some(i);
+                        }
                     }
                 }
-                if let Some(i) = best_point {
+                if response.drag_released() {
+                    *grabbed_point = None;
+                }
+                if let Some(i) = *grabbed_point {
                     let p = (pos - c) / r;
                     points[i].x = p.x as f64;
                     points[i].y = p.y as f64;

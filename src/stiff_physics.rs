@@ -56,6 +56,7 @@ fn spring_force<const S: usize>(
 }
 
 pub fn new_state_vector_from_points(points: &[Point<f64, D>]) -> DVector<f64> {
+    puffin::profile_function!();
     let num_points = points.len();
     let block_size = num_points * D;
     let system_size = block_size * 2 + 1;
@@ -75,6 +76,7 @@ pub fn create_diff_eq_system_around_y0(
     point_masses: &[f64],
     springs: &[Spring],
 ) -> DMatrix<f64> {
+    puffin::profile_function!();
     assert_eq!(y0.len(), point_masses.len() * D * 2 + 1);
     let num_points = point_masses.len();
     let block_size = num_points * D;

@@ -20,6 +20,7 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new() -> anyhow::Result<AudioPlayer> {
+        puffin::profile_function!();
         let host = cpal::default_host();
 
         let optional_device = host.default_output_device();
@@ -46,6 +47,7 @@ impl AudioPlayer {
     }
 
     fn start_output_stream(&mut self) -> anyhow::Result<()> {
+        puffin::profile_function!();
         let (mut disposal_queue_producer, disposal_queue_consumer) = rtrb::RingBuffer::new(2);
         let (sampling_function_producer, mut sampling_function_consumer) = rtrb::RingBuffer::new(2);
         let (mut to_ui_producer, to_ui_consumer) =
@@ -113,6 +115,7 @@ impl AudioPlayer {
     }
 
     pub fn play_audio(&mut self, next_sample: SamplingFunction) -> anyhow::Result<()> {
+        puffin::profile_function!();
         if let Some(disposal_queue) = &mut self.disposal_queue_consumer {
             // Old sampling functions are implicitly dropped here.
             while disposal_queue.pop().is_ok() {}
@@ -134,12 +137,14 @@ pub fn run<T>(
 where
     T: cpal::Sample,
 {
+    puffin::profile_function!();
     let channels = config.channels as usize;
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
 
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+            puffin::profile_function!();
             write_data(data, channels, &mut next_sample)
         },
         err_fn,

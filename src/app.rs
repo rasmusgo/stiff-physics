@@ -115,6 +115,12 @@ impl epi::App for StiffPhysicsApp {
     /// Called each time the UI needs repainting, which may be many times per second.
     /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
+        puffin::profile_function!();
+        puffin::GlobalProfiler::lock().new_frame();
+        if puffin::are_scopes_on() && !puffin_egui::profiler_window(ctx) {
+            puffin::set_scopes_on(false);
+        }
+
         let Self {
             point_mass,
             points,
@@ -163,9 +169,12 @@ impl epi::App for StiffPhysicsApp {
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
             ui.heading("Side Panel");
 
+            if ui.button("Start profiler").clicked() {
+                puffin::set_scopes_on(true);
+            }
             for spring in &mut *springs {
-                ui.add(egui::Slider::new(&mut spring.k, 0.0..=1000.0).text("spring_constant"));
-                ui.add(egui::Slider::new(&mut spring.d, 0.0..=1000.0).text("damping"));
+                ui.add(egui::Slider::new(&mut spring.k, 0.0..=100000.0).text("spring_constant"));
+                ui.add(egui::Slider::new(&mut spring.d, 0.0..=100000.0).text("damping"));
             }
             ui.add(egui::Slider::new(point_mass, 0.01..=10.0).text("point_mass"));
 
@@ -192,26 +201,37 @@ impl epi::App for StiffPhysicsApp {
                 })
                 .inner;
             if clicked_simulate {
+                puffin::profile_scope!("start simulation");
                 let point_masses = [*point_mass as f64].repeat(points.len());
                 let y0 = new_state_vector_from_points(relaxed_points);
                 let mat_a = create_diff_eq_system_around_y0(&y0, &point_masses, springs);
                 let p0_vel_loc = points.len() * D;
                 *simulation_state = new_state_vector_from_points(points);
-                *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
-                *exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
+                {
+                    puffin::profile_scope!("exp_a_sim_step");
+                    *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
+                }
+                {
+                    puffin::profile_scope!("exp_a_audio_step");
+                    *exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
+                }
                 *enable_simulation = true;
                 // println!("{:?}", mat_a);
                 // println!("{:?}", &*mat_a * &*simulation_state);
 
                 // Generate audio to find max_value for normalization
-                let mut y = simulation_state.clone();
-                let mut max_value: f32 = 0.1;
-                for _i in 0..44100 / 10 {
-                    let y_next = &*exp_a_audio_step * &y;
-                    let value = (y_next[p0_vel_loc] - y[p0_vel_loc]) as f32;
-                    max_value = f32::max(max_value, value.abs());
-                    y = y_next;
-                }
+                let max_value = {
+                    puffin::profile_scope!("audio normalization");
+                    let mut y = simulation_state.clone();
+                    let mut max_value: f32 = 0.1;
+                    for _i in 0..44100 / 10 {
+                        let y_next = &*exp_a_audio_step * &y;
+                        let value = (y_next[p0_vel_loc] - y[p0_vel_loc]) as f32;
+                        max_value = f32::max(max_value, value.abs());
+                        y = y_next;
+                    }
+                    max_value
+                };
 
                 // Create communication channel to send back simulation state to UI.
                 //      UI thread               Audio thread
@@ -243,8 +263,12 @@ impl epi::App for StiffPhysicsApp {
                     *audio_player_ref = Some(AudioPlayer::new());
                 }
                 if let Some(Ok(player)) = audio_player_ref.as_mut() {
+                    puffin::profile_scope!("create sampling function");
                     let sample_rate = player.config.sample_rate().0 as f64;
-                    let exp_a_audio_step = (mat_a / sample_rate).exp();
+                    let exp_a_audio_step = {
+                        puffin::profile_scope!("exp(mat_a / sample_rate)");
+                        (mat_a / sample_rate).exp()
+                    };
                     let fade_in_rate = 50.0 / sample_rate as f32;
 
                     // Produce a waveform by advancing the simulation.

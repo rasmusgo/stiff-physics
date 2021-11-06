@@ -440,7 +440,7 @@ impl EigenvalueDecomposition {
         let mut q = 0.0;
         let mut r = 0.0;
         let mut s = 0.0;
-        let mut z;
+        let mut z = 0.0;
         let mut t;
         let mut w;
         let mut x;
@@ -488,8 +488,11 @@ impl EigenvalueDecomposition {
                 hess[(n, n)] = hess[(n, n)] + exshift;
                 d[n] = hess[(n, n)];
                 e[n] = 0.0;
-                n -= 1;
                 iter = 0;
+                if n == 0 {
+                    break 'outer;
+                }
+                n -= 1;
 
             // Two roots found
             } else if (l as isize) == (n as isize) - 1 {
@@ -737,7 +740,7 @@ impl EigenvalueDecomposition {
                 let mut l = n;
                 hess[(n, n)] = 1.0;
                 // for i = n-1; i >= 0; i--) {
-                for i in (0..=(n - 1)).rev() {
+                for i in (0..n).rev() {
                     w = hess[(i, i)] - p;
                     r = 0.0;
                     for j in l..=n {

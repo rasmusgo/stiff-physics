@@ -62,6 +62,7 @@ pub struct EigenvalueDecomposition {
 
 impl EigenvalueDecomposition {
     fn tred2(&mut self) {
+        puffin::profile_function!();
         let Self { d, e, eig_vecs, .. } = self;
         let n = self.n;
 
@@ -179,6 +180,7 @@ impl EigenvalueDecomposition {
     // Symmetric tridiagonal QL algorithm.
 
     fn tql2(&mut self) {
+        puffin::profile_function!();
         //  This is derived from the Algol procedures tql2, by
         //  Bowdler, Martin, Reinsch, and Wilkinson, Handbook for
         //  Auto. Comp., Vol.ii-Linear Algebra, and the corresponding
@@ -302,6 +304,7 @@ impl EigenvalueDecomposition {
     // Nonsymmetric reduction to Hessenberg form.
 
     fn orthes(&mut self) {
+        puffin::profile_function!();
         //  This is derived from the Algol procedures orthes and ortran,
         //  by Martin and Wilkinson, Handbook for Auto. Comp.,
         //  Vol.ii-Linear Algebra, and the corresponding
@@ -412,6 +415,7 @@ impl EigenvalueDecomposition {
     // Nonsymmetric reduction from Hessenberg to real Schur form.
 
     fn hqr2(&mut self) {
+        puffin::profile_function!();
         //  This is derived from the Algol procedure hqr2,
         //  by Martin and Wilkinson, Handbook for Auto. Comp.,
         //  Vol.ii-Linear Algebra, and the corresponding
@@ -898,6 +902,7 @@ impl EigenvalueDecomposition {
     */
 
     pub fn new(mat: DMatrix<f64>) -> Self {
+        puffin::profile_function!();
         let n = mat.ncols();
         let mut issymmetric = true;
         'outer: for j in 0..n {

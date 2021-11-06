@@ -1,4 +1,5 @@
 use std::{
+    f64::consts::TAU,
     mem,
     sync::{atomic::Ordering, Arc},
 };
@@ -12,6 +13,7 @@ use nalgebra::{self, DMatrix, DVector, Point2};
 
 use crate::{
     audio_player::AudioPlayer,
+    eigenvalue_decomposition::EigenvalueDecomposition,
     stiff_physics::{create_diff_eq_system_around_y0, new_state_vector_from_points, Spring, D},
 };
 
@@ -47,6 +49,7 @@ pub struct StiffPhysicsApp {
     simulation_state: DVector<f64>,
     exp_a_sim_step: DMatrix<f64>,
     exp_a_audio_step: DMatrix<f64>,
+    eigen_decomp: Option<EigenvalueDecomposition>,
     enable_simulation: bool,
     pub audio_player: Arc<Mutex<Option<anyhow::Result<AudioPlayer>>>>,
     audio_history: Vec<(f32, f32, f32, f32)>,
@@ -86,6 +89,7 @@ impl Default for StiffPhysicsApp {
             simulation_state: DVector::zeros(system_size),
             exp_a_sim_step: DMatrix::zeros(system_size, system_size),
             exp_a_audio_step: DMatrix::zeros(system_size, system_size),
+            eigen_decomp: None,
             enable_simulation: false,
             audio_player: Default::default(),
             audio_history: Vec::new(),
@@ -129,6 +133,7 @@ impl epi::App for StiffPhysicsApp {
             simulation_state,
             exp_a_sim_step,
             exp_a_audio_step,
+            eigen_decomp,
             enable_simulation,
             audio_player,
             audio_history,
@@ -220,6 +225,8 @@ impl epi::App for StiffPhysicsApp {
                 // println!("{:?}", mat_a);
                 // println!("{:?}", &*mat_a * &*simulation_state);
 
+                *eigen_decomp = Some(EigenvalueDecomposition::new(mat_a.clone()));
+
                 // Create communication channel to send back simulation state to UI.
                 //      UI thread               Audio thread
                 //      ---------               ------------
@@ -280,6 +287,20 @@ impl epi::App for StiffPhysicsApp {
                     };
 
                     player.play_audio(Box::new(next_sample)).unwrap();
+                }
+            }
+
+            if let Some(eigen_decomp) = eigen_decomp {
+                for (real, imag) in eigen_decomp
+                    .get_real_eigenvalues()
+                    .iter()
+                    .zip(eigen_decomp.get_imag_eigenvalues())
+                {
+                    ui.label(if *imag != 0.0 {
+                        format!("{} + {}i = {:.2} hz", real, imag, imag / TAU)
+                    } else {
+                        format!("{}", real)
+                    });
                 }
             }
 

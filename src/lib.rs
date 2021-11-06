@@ -4,6 +4,8 @@
 
 mod app;
 mod audio_player;
+#[allow(warnings)] // Allow warnings in eigenvalue_decomposition
+mod eigenvalue_decomposition;
 mod stiff_physics;
 
 pub use app::StiffPhysicsApp;

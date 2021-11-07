@@ -178,7 +178,17 @@ impl epi::App for StiffPhysicsApp {
                 }
             });
 
-            if ui.button("Simulate").clicked() {
+            let clicked_simulate = ui
+                .vertical_centered_justified(|ui| {
+                    ui.add(
+                        egui::Button::new("\nSimulate\n")
+                            .text_style(egui::TextStyle::Heading)
+                            .fill(egui::Color32::GREEN),
+                    )
+                    .clicked()
+                })
+                .inner;
+            if clicked_simulate {
                 let point_masses = [*point_mass as f64].repeat(points.len());
                 let y0 = new_state_vector_from_points(relaxed_points);
                 let mat_a = create_diff_eq_system_around_y0(&y0, &point_masses, springs);

@@ -51,6 +51,7 @@ pub struct StiffPhysicsApp {
     pub audio_player: Arc<Mutex<Option<anyhow::Result<AudioPlayer>>>>,
     audio_history: Vec<(f32, f32)>,
     audio_history_index: usize,
+    audio_history_resolution: usize,
     state_vector_producer: rtrb::Producer<DVector<f64>>,
     state_vector_consumer: rtrb::Consumer<DVector<f64>>,
 }
@@ -88,6 +89,7 @@ impl Default for StiffPhysicsApp {
             audio_player: Default::default(),
             audio_history: Vec::new(),
             audio_history_index: 0,
+            audio_history_resolution: 1000,
             state_vector_producer,
             state_vector_consumer,
         }
@@ -123,6 +125,7 @@ impl epi::App for StiffPhysicsApp {
             audio_player,
             audio_history,
             audio_history_index,
+            audio_history_resolution,
             state_vector_producer,
             state_vector_consumer,
         } = self;
@@ -279,23 +282,25 @@ impl epi::App for StiffPhysicsApp {
                     }
                 }
 
+                ui.add(
+                    egui::Slider::new(audio_history_resolution, 10..=sample_rate)
+                        .text("Graph resolution"),
+                );
+                let step = (audio_history.len() / *audio_history_resolution).max(1);
                 let (left, right) = audio_history.split_at(*audio_history_index);
-                let line_raw = Line::new(Values::from_values_iter(
-                    right.iter().chain(left).enumerate().map(|(i, val)| {
-                        Value::new(
-                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
-                            val.0 as f64,
-                        )
-                    }),
-                ));
-                let line_filtered = Line::new(Values::from_values_iter(
-                    right.iter().chain(left).enumerate().map(|(i, val)| {
-                        Value::new(
-                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
-                            val.1 as f64,
-                        )
-                    }),
-                ));
+                let iter = right.iter().chain(left).enumerate().step_by(step);
+                let line_raw = Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
+                    Value::new(
+                        (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                        val.0 as f64,
+                    )
+                })));
+                let line_filtered = Line::new(Values::from_values_iter(iter.map(|(i, val)| {
+                    Value::new(
+                        (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                        val.1 as f64,
+                    )
+                })));
                 ui.add(
                     Plot::new("Audio")
                         .line(line_raw)

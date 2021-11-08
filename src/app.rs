@@ -49,7 +49,7 @@ pub struct StiffPhysicsApp {
     exp_a_audio_step: DMatrix<f64>,
     enable_simulation: bool,
     pub audio_player: Arc<Mutex<Option<anyhow::Result<AudioPlayer>>>>,
-    audio_history: Vec<(f32, f32)>,
+    audio_history: Vec<(f32, f32, f32, f32)>,
     audio_history_index: usize,
     audio_history_resolution: usize,
     state_vector_producer: rtrb::Producer<DVector<f64>>,
@@ -219,20 +219,6 @@ impl epi::App for StiffPhysicsApp {
                 // println!("{:?}", mat_a);
                 // println!("{:?}", &*mat_a * &*simulation_state);
 
-                // Generate audio to find max_value for normalization
-                let max_value = {
-                    puffin::profile_scope!("audio normalization");
-                    let mut y = simulation_state.clone();
-                    let mut max_value: f32 = 0.1;
-                    for _i in 0..44100 / 10 {
-                        let y_next = &*exp_a_audio_step * &y;
-                        let value = (y_next[p0_vel_loc] - y[p0_vel_loc]) as f32;
-                        max_value = f32::max(max_value, value.abs());
-                        y = y_next;
-                    }
-                    max_value
-                };
-
                 // Create communication channel to send back simulation state to UI.
                 //      UI thread               Audio thread
                 //      ---------               ------------
@@ -289,7 +275,7 @@ impl epi::App for StiffPhysicsApp {
                                 to_ui_producer.push(state_storage).unwrap();
                             }
                         }
-                        value / max_value
+                        value
                     };
 
                     player.play_audio(Box::new(next_sample)).unwrap();
@@ -332,16 +318,33 @@ impl epi::App for StiffPhysicsApp {
                         val.0 as f64,
                     )
                 })));
-                let line_filtered = Line::new(Values::from_values_iter(iter.map(|(i, val)| {
-                    Value::new(
-                        (i as f64 - audio_history.len() as f64) / sample_rate as f64,
-                        val.1 as f64,
-                    )
-                })));
+                let line_filtered =
+                    Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
+                        Value::new(
+                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                            val.1 as f64,
+                        )
+                    })));
+                let line_power_raw =
+                    Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
+                        Value::new(
+                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                            val.2 as f64,
+                        )
+                    })));
+                let line_power_filtered =
+                    Line::new(Values::from_values_iter(iter.map(|(i, val)| {
+                        Value::new(
+                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                            val.3 as f64,
+                        )
+                    })));
                 ui.add(
                     Plot::new("Audio")
                         .line(line_raw)
                         .line(line_filtered)
+                        .line(line_power_raw)
+                        .line(line_power_filtered)
                         .view_aspect(1.0)
                         .include_x(-1.0)
                         .include_x(0.0)

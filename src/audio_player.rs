@@ -14,7 +14,7 @@ pub struct AudioPlayer {
     stream: Option<anyhow::Result<cpal::Stream>>,
     sampling_function_producer: Option<rtrb::Producer<SamplingFunction>>,
     disposal_queue_consumer: Option<rtrb::Consumer<SamplingFunction>>,
-    pub to_ui_consumer: Option<rtrb::Consumer<(f32, f32)>>,
+    pub to_ui_consumer: Option<rtrb::Consumer<(f32, f32, f32, f32)>>,
     pub enable_band_pass_filter: Arc<AtomicBool>,
     pub num_frames_per_callback: Arc<AtomicUsize>,
 }
@@ -110,7 +110,7 @@ pub fn run<T>(
     enable_band_pass_filter: Arc<AtomicBool>,
     mut sampling_function_consumer: rtrb::Consumer<SamplingFunction>,
     mut disposal_queue_producer: rtrb::Producer<SamplingFunction>,
-    mut to_ui_producer: rtrb::Producer<(f32, f32)>,
+    mut to_ui_producer: rtrb::Producer<(f32, f32, f32, f32)>,
     num_frames_per_callback: Arc<AtomicUsize>,
 ) -> anyhow::Result<cpal::Stream>
 where
@@ -125,8 +125,15 @@ where
     // Exponential moving average band-pass filtering
     const ALPHA1: f32 = 0.01;
     const ALPHA2: f32 = 0.001;
+    const ALPHA_ATTACK: f32 = 0.01;
+    const ALPHA_RELEASE: f32 = 0.0001;
+    const BASELINE: f32 = 0.1;
+    const HEADROOM_FRACTION: f32 = 0.25;
+    const HEADROOM_FACTOR: f32 = 1.0 - HEADROOM_FRACTION;
     let mut moving_average1 = 0_f32;
     let mut moving_average2 = 0_f32;
+    let mut moving_power_average_filtered = BASELINE;
+    let mut moving_power_average_raw = BASELINE;
 
     puffin::profile_function!();
     let stream = device.build_output_stream(
@@ -158,14 +165,41 @@ where
                 moving_average1 = moving_average1 * (1.0 - ALPHA1) + value * ALPHA1;
                 moving_average2 = moving_average2 * (1.0 - ALPHA2) + value * ALPHA2;
                 let filtered_value = moving_average1 - moving_average2;
+                let filtered_tall_puppy = filtered_value.abs() + BASELINE;
+                if filtered_tall_puppy > moving_power_average_filtered {
+                    moving_power_average_filtered = moving_power_average_filtered
+                        * (1.0 - ALPHA_ATTACK)
+                        + filtered_tall_puppy * ALPHA_ATTACK;
+                } else {
+                    moving_power_average_filtered = moving_power_average_filtered
+                        * (1.0 - ALPHA_RELEASE)
+                        + filtered_tall_puppy * ALPHA_RELEASE;
+                }
+                let raw_tall_puppy = value.abs() + BASELINE;
+                if raw_tall_puppy > moving_power_average_raw {
+                    moving_power_average_raw = moving_power_average_raw * (1.0 - ALPHA_ATTACK)
+                        + raw_tall_puppy * ALPHA_ATTACK;
+                } else {
+                    moving_power_average_raw = moving_power_average_raw * (1.0 - ALPHA_RELEASE)
+                        + raw_tall_puppy * ALPHA_RELEASE;
+                }
+
+                let normalized_filtered_value =
+                    HEADROOM_FACTOR * filtered_value / moving_power_average_filtered;
+                let normalized_value = HEADROOM_FACTOR * value / moving_power_average_raw;
 
                 // Try to push but ignore if it works or not.
-                let _ = to_ui_producer.push((value, filtered_value));
+                let _ = to_ui_producer.push((
+                    normalized_value,
+                    normalized_filtered_value,
+                    moving_power_average_raw,
+                    moving_power_average_filtered,
+                ));
 
                 if enable_band_pass_filter.load(Ordering::Relaxed) {
-                    filtered_value
+                    normalized_filtered_value
                 } else {
-                    value
+                    normalized_value
                 }
             };
 

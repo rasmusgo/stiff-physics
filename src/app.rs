@@ -169,6 +169,7 @@ impl epi::App for StiffPhysicsApp {
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
             ui.heading("Side Panel");
 
+            #[cfg(not(target_arch = "wasm32"))]
             if ui.button("Start profiler").clicked() {
                 puffin::set_scopes_on(true);
             }

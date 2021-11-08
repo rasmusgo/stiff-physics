@@ -205,7 +205,7 @@ impl epi::App for StiffPhysicsApp {
 
                 // Generate audio to find max_value for normalization
                 let mut y = simulation_state.clone();
-                let mut max_value: f32 = 0.0;
+                let mut max_value: f32 = 0.1;
                 for _i in 0..44100 / 10 {
                     let y_next = &*exp_a_audio_step * &y;
                     let value = (y_next[p0_vel_loc] - y[p0_vel_loc]) as f32;

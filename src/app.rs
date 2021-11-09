@@ -121,24 +121,6 @@ impl epi::App for StiffPhysicsApp {
             puffin::set_scopes_on(false);
         }
 
-        let Self {
-            point_mass,
-            points,
-            springs,
-            relaxed_points,
-            simulation_state,
-            exp_a_sim_step,
-            exp_a_audio_step,
-            enable_simulation,
-            audio_player,
-            audio_history,
-            audio_history_index,
-            audio_history_resolution,
-            state_vector_producer,
-            state_vector_consumer,
-            grabbed_point,
-        } = self;
-
         // Examples of how to create different panels and windows.
         // Pick whichever suits you.
         // Tip: a good default choice is to just keep the `CentralPanel`.
@@ -155,12 +137,12 @@ impl epi::App for StiffPhysicsApp {
         //     });
         // });
 
-        if *enable_simulation {
+        if self.enable_simulation {
             // Get updated simulation state from the audio thread.
-            if let Ok(state_storage) = state_vector_consumer.pop() {
+            if let Ok(state_storage) = self.state_vector_consumer.pop() {
                 // Pass back the old vector so that the audio thread doesn't need to allocate.
-                state_vector_producer
-                    .push(mem::replace(simulation_state, state_storage))
+                self.state_vector_producer
+                    .push(mem::replace(&mut self.simulation_state, state_storage))
                     .unwrap();
             }
             ctx.request_repaint();
@@ -173,21 +155,21 @@ impl epi::App for StiffPhysicsApp {
             if ui.button("Start profiler").clicked() {
                 puffin::set_scopes_on(true);
             }
-            for spring in &mut *springs {
+            for spring in &mut self.springs {
                 ui.add(egui::Slider::new(&mut spring.k, 0.0..=100000.0).text("spring_constant"));
                 ui.add(egui::Slider::new(&mut spring.d, 0.0..=100000.0).text("damping"));
             }
-            ui.add(egui::Slider::new(point_mass, 0.01..=10.0).text("point_mass"));
+            ui.add(egui::Slider::new(&mut self.point_mass, 0.01..=10.0).text("point_mass"));
 
             ui.horizontal(|ui| {
                 if ui.button("Store as relaxed").clicked() {
-                    for spring in &mut *springs {
-                        spring.length = (points[spring.p1] - points[spring.p2]).norm();
+                    for spring in &mut *self.springs {
+                        spring.length = (self.points[spring.p1] - self.points[spring.p2]).norm();
                     }
-                    *relaxed_points = points.clone();
+                    self.relaxed_points = self.points.clone();
                 }
                 if ui.button("Load relaxed").clicked() {
-                    *points = relaxed_points.clone();
+                    self.points = self.relaxed_points.clone();
                 }
             });
 
@@ -203,20 +185,20 @@ impl epi::App for StiffPhysicsApp {
                 .inner;
             if clicked_simulate {
                 puffin::profile_scope!("start simulation");
-                let point_masses = [*point_mass as f64].repeat(points.len());
-                let y0 = new_state_vector_from_points(relaxed_points);
-                let mat_a = create_diff_eq_system_around_y0(&y0, &point_masses, springs);
-                let p0_vel_loc = points.len() * D;
-                *simulation_state = new_state_vector_from_points(points);
+                let point_masses = [self.point_mass as f64].repeat(self.points.len());
+                let y0 = new_state_vector_from_points(&self.relaxed_points);
+                let mat_a = create_diff_eq_system_around_y0(&y0, &point_masses, &self.springs);
+                let p0_vel_loc = self.points.len() * D;
+                self.simulation_state = new_state_vector_from_points(&self.points);
                 {
                     puffin::profile_scope!("exp_a_sim_step");
-                    *exp_a_sim_step = (mat_a.clone() * 0.01).exp();
+                    self.exp_a_sim_step = (mat_a.clone() * 0.01).exp();
                 }
                 {
                     puffin::profile_scope!("exp_a_audio_step");
-                    *exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
+                    self.exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
                 }
-                *enable_simulation = true;
+                self.enable_simulation = true;
                 // println!("{:?}", mat_a);
                 // println!("{:?}", &*mat_a * &*simulation_state);
 
@@ -236,16 +218,16 @@ impl epi::App for StiffPhysicsApp {
                 let (mut to_ui_producer, to_ui_consumer) = rtrb::RingBuffer::new(1);
 
                 // Store these so we can communicate with the audio thread.
-                *state_vector_producer = to_audio_producer;
-                *state_vector_consumer = to_ui_consumer;
+                self.state_vector_producer = to_audio_producer;
+                self.state_vector_consumer = to_ui_consumer;
 
                 // Create some state vector storage to pass back and forth.
-                state_vector_producer
-                    .push(simulation_state.clone())
+                self.state_vector_producer
+                    .push(self.simulation_state.clone())
                     .unwrap();
 
                 // Send audio generator functor to audio player
-                let mut audio_player_ref = audio_player.lock();
+                let mut audio_player_ref = self.audio_player.lock();
                 if audio_player_ref.is_none() {
                     *audio_player_ref = Some(AudioPlayer::new());
                 }
@@ -259,8 +241,8 @@ impl epi::App for StiffPhysicsApp {
                     let fade_in_rate = 50.0 / sample_rate as f32;
 
                     // Produce a waveform by advancing the simulation.
-                    let mut y = simulation_state.clone();
-                    let mut y_next = simulation_state.clone();
+                    let mut y = self.simulation_state.clone();
+                    let mut y_next = self.simulation_state.clone();
                     let mut fade = 0.0;
                     let next_sample = move || {
                         y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
@@ -283,7 +265,7 @@ impl epi::App for StiffPhysicsApp {
                 }
             }
 
-            if let Some(Ok(player)) = audio_player.lock().as_mut() {
+            if let Some(Ok(player)) = self.audio_player.lock().as_mut() {
                 let mut enable_band_pass_filter =
                     player.enable_band_pass_filter.load(Ordering::Relaxed);
                 if ui
@@ -297,46 +279,47 @@ impl epi::App for StiffPhysicsApp {
                 let sample_rate = player.config.sample_rate().0 as usize;
                 if let Some(consumer) = &mut player.to_ui_consumer {
                     while let Ok(data) = consumer.pop() {
-                        if audio_history.len() < sample_rate {
-                            audio_history.push(data);
+                        if self.audio_history.len() < sample_rate {
+                            self.audio_history.push(data);
                         } else {
-                            audio_history[*audio_history_index] = data;
-                            *audio_history_index = (*audio_history_index + 1) % audio_history.len();
+                            self.audio_history[self.audio_history_index] = data;
+                            self.audio_history_index =
+                                (self.audio_history_index + 1) % self.audio_history.len();
                         }
                     }
                 }
 
                 ui.add(
-                    egui::Slider::new(audio_history_resolution, 10..=sample_rate)
+                    egui::Slider::new(&mut self.audio_history_resolution, 10..=sample_rate)
                         .text("Graph resolution"),
                 );
-                let step = (audio_history.len() / *audio_history_resolution).max(1);
-                let (left, right) = audio_history.split_at(*audio_history_index);
+                let step = (self.audio_history.len() / self.audio_history_resolution).max(1);
+                let (left, right) = self.audio_history.split_at(self.audio_history_index);
                 let iter = right.iter().chain(left).enumerate().step_by(step);
                 let line_raw = Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
                     Value::new(
-                        (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                        (i as f64 - self.audio_history.len() as f64) / sample_rate as f64,
                         val.0 as f64,
                     )
                 })));
                 let line_filtered =
                     Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
                         Value::new(
-                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                            (i as f64 - self.audio_history.len() as f64) / sample_rate as f64,
                             val.1 as f64,
                         )
                     })));
                 let line_power_raw =
                     Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
                         Value::new(
-                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                            (i as f64 - self.audio_history.len() as f64) / sample_rate as f64,
                             val.2 as f64,
                         )
                     })));
                 let line_power_filtered =
                     Line::new(Values::from_values_iter(iter.map(|(i, val)| {
                         Value::new(
-                            (i as f64 - audio_history.len() as f64) / sample_rate as f64,
+                            (i as f64 - self.audio_history.len() as f64) / sample_rate as f64,
                             val.3 as f64,
                         )
                     })));
@@ -383,45 +366,52 @@ impl epi::App for StiffPhysicsApp {
             if let Some(pos) = response.interact_pointer_pos() {
                 if response.drag_started() {
                     let mut best_norm2 = 15. * 15.;
-                    for (i, &mut p) in points.iter_mut().enumerate() {
+                    for (i, &mut p) in self.points.iter_mut().enumerate() {
                         let point_in_pixels = c + vec2(p.x as f32, p.y as f32) * r;
                         let diff = pos - point_in_pixels;
                         let norm2 = diff.x * diff.x + diff.y * diff.y;
                         if norm2 <= best_norm2 {
                             best_norm2 = norm2;
-                            *grabbed_point = Some(i);
+                            self.grabbed_point = Some(i);
                         }
                     }
                 }
                 if response.drag_released() {
-                    *grabbed_point = None;
+                    self.grabbed_point = None;
                 }
-                if let Some(i) = *grabbed_point {
+                if let Some(i) = self.grabbed_point {
                     let p = (pos - c) / r;
-                    points[i].x = p.x as f64;
-                    points[i].y = p.y as f64;
+                    self.points[i].x = p.x as f64;
+                    self.points[i].y = p.y as f64;
                 }
             }
-            if *enable_simulation {
-                let num_simulated_points = simulation_state.len() / 4;
+            if self.enable_simulation {
+                let num_simulated_points = self.simulation_state.len() / 4;
                 let mut simulated_points = Vec::<Point2<f64>>::with_capacity(num_simulated_points);
                 for i in 0..num_simulated_points {
                     simulated_points.push(Point2::new(
-                        simulation_state[i * D],
-                        simulation_state[i * D + 1],
+                        self.simulation_state[i * D],
+                        self.simulation_state[i * D + 1],
                     ));
                 }
                 draw_particle_system(
                     &simulated_points[..],
-                    &*springs,
+                    &self.springs,
                     line_width * 3.0,
                     &painter,
                     c,
                     r,
                 );
             }
-            draw_particle_system(&relaxed_points[..], &*springs, line_width, &painter, c, r);
-            draw_particle_system(points, &*springs, line_width, &painter, c, r);
+            draw_particle_system(
+                &self.relaxed_points[..],
+                &self.springs,
+                line_width,
+                &painter,
+                c,
+                r,
+            );
+            draw_particle_system(&self.points, &self.springs, line_width, &painter, c, r);
 
             ui.hyperlink("https://github.com/rasmusgo/stiff-physics");
             ui.add(egui::github_link_file!(

@@ -949,6 +949,7 @@ impl EigenvalueDecomposition {
     @return     V
     */
 
+    #[inline]
     pub fn get_eigenvectors(&self) -> &DMatrix<f64> {
         &self.eig_vecs
     }
@@ -957,6 +958,7 @@ impl EigenvalueDecomposition {
     @return     real(diag(D))
     */
 
+    #[inline]
     pub fn get_real_eigenvalues(&self) -> &DVector<f64> {
         &self.d
     }
@@ -965,6 +967,7 @@ impl EigenvalueDecomposition {
     @return     imag(diag(D))
     */
 
+    #[inline]
     pub fn get_imag_eigenvalues(&self) -> &DVector<f64> {
         &self.e
     }

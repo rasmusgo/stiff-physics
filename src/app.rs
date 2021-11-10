@@ -40,6 +40,7 @@ const SPRINGS: [Spring; 3] = [
 ];
 
 pub struct StiffPhysicsApp {
+    listener_pos: Point2<f64>,
     point_mass: f32,
     points: Vec<Point2<f64>>,
     springs: Vec<Spring>,
@@ -59,6 +60,8 @@ pub struct StiffPhysicsApp {
 
 impl Default for StiffPhysicsApp {
     fn default() -> Self {
+        let listener_pos = Point2::new(0.0, 1.0);
+
         let points = vec![
             Point2::new(-0.6, 0.2),
             Point2::new(0., -(0.75_f64.sqrt()) + 0.2),
@@ -79,6 +82,7 @@ impl Default for StiffPhysicsApp {
         let (state_vector_producer, state_vector_consumer) = rtrb::RingBuffer::new(1);
 
         Self {
+            listener_pos,
             point_mass: 0.01,
             points,
             springs,
@@ -188,7 +192,6 @@ impl epi::App for StiffPhysicsApp {
                 let point_masses = [self.point_mass as f64].repeat(self.points.len());
                 let y0 = new_state_vector_from_points(&self.relaxed_points);
                 let mat_a = create_diff_eq_system_around_y0(&y0, &point_masses, &self.springs);
-                let p0_vel_loc = self.points.len() * D;
                 self.simulation_state = new_state_vector_from_points(&self.points);
                 {
                     puffin::profile_scope!("exp_a_sim_step");
@@ -238,27 +241,72 @@ impl epi::App for StiffPhysicsApp {
                         puffin::profile_scope!("exp(mat_a / sample_rate)");
                         (mat_a / sample_rate).exp()
                     };
-                    let fade_in_rate = 50.0 / sample_rate as f32;
 
-                    // Produce a waveform by advancing the simulation.
-                    let mut y = self.simulation_state.clone();
-                    let mut y_next = self.simulation_state.clone();
-                    let mut fade = 0.0;
+                    // Keep a history of states in a circular buffer so that we can create a waveform by combining contributions over time.
+                    const SAMPLES_IN_BUFFER: usize = 1024;
+                    const SPEED_OF_SOUND: f64 = 343.0;
+                    let num_points = self.points.len();
+                    let listener_pos = self.listener_pos;
+                    let meters_per_sample = SPEED_OF_SOUND / sample_rate;
+                    let mut state_history = self
+                        .simulation_state
+                        .clone()
+                        .resize_horizontally(SAMPLES_IN_BUFFER, 0.0);
+                    let mut index_of_newest: usize = 0;
                     let next_sample = move || {
-                        y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
-                        let value = fade * ((y_next[p0_vel_loc] - y[p0_vel_loc]) as f32);
-                        mem::swap(&mut y, &mut y_next);
-                        if fade < 1.0 {
-                            fade = (fade + fade_in_rate).min(1.0);
+                        // Advance the simulation and record history
+                        {
+                            let read_index = index_of_newest;
+                            let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
+                            let (y, mut y_next) =
+                                state_history.columns_range_pair_mut(read_index, write_index);
+                            y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
+                            index_of_newest = write_index;
+                        }
+
+                        // Traverse history to find the waves that are contributing to what the listener should be hearing right now.
+                        let mut value = 0.0;
+                        for point_index in 0..num_points {
+                            let point_pos_loc = point_index * D;
+                            let point_vel_loc = num_points * D + point_index * D;
+
+                            for i in 1..SAMPLES_IN_BUFFER {
+                                let read_index =
+                                    (index_of_newest + SAMPLES_IN_BUFFER - i) % SAMPLES_IN_BUFFER;
+                                let y = &state_history.column(read_index);
+                                if y[y.nrows() - 1] == 0.0 {
+                                    // Abort if we find unwritten data
+                                    break;
+                                }
+                                let relative_position = nalgebra::Vector2::new(
+                                    y[point_pos_loc] - listener_pos[0],
+                                    y[point_pos_loc + 1] - listener_pos[1],
+                                );
+                                let distance_by_time = i as f64 * meters_per_sample;
+                                let distance_by_state = relative_position.norm();
+                                if distance_by_state < distance_by_time {
+                                    let read_index_prev =
+                                        (read_index + SAMPLES_IN_BUFFER - 1) % SAMPLES_IN_BUFFER;
+                                    let y_prev = &state_history.column(read_index_prev);
+                                    let p0_acc = nalgebra::Vector2::new(
+                                        y[point_vel_loc] - y_prev[point_vel_loc],
+                                        y[point_vel_loc + 1] - y_prev[point_vel_loc + 1],
+                                    );
+                                    let direction = relative_position.normalize();
+                                    value += p0_acc.dot(&direction)
+                                        / (distance_by_time * distance_by_time);
+                                    break;
+                                }
+                            }
                         }
                         if !to_ui_producer.is_full() {
                             if let Ok(mut state_storage) = to_audio_consumer.pop() {
-                                // Put an (almost) up to state vector in the provided storage and send it back.
-                                mem::swap(&mut state_storage, &mut y_next);
+                                // Put an up to date state vector in the provided storage and send it back.
+                                state_storage.set_column(0, &state_history.column(index_of_newest));
                                 to_ui_producer.push(state_storage).unwrap();
                             }
                         }
-                        value
+                        value as f32
                     };
 
                     player.play_audio(Box::new(next_sample)).unwrap();
@@ -412,6 +460,11 @@ impl epi::App for StiffPhysicsApp {
                 r,
             );
             draw_particle_system(&self.points, &self.springs, line_width, &painter, c, r);
+
+            let p = egui::Vec2::new(self.listener_pos.x as f32, self.listener_pos.y as f32);
+            let circle_radius = r * 0.05;
+            let stroke = Stroke::new(line_width, Color32::BLACK);
+            painter.circle(c + p * r, circle_radius, Color32::GOLD, stroke);
 
             ui.hyperlink("https://github.com/rasmusgo/stiff-physics");
             ui.add(egui::github_link_file!(

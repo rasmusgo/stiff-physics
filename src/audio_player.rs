@@ -6,12 +6,16 @@ use std::sync::{
 use anyhow::anyhow;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-type SamplingFunction = Box<dyn Send + FnMut() -> f32>;
+use nalgebra::{self, Point2};
+
+type SamplingFunction = Box<dyn Send + FnMut(ListenerPos) -> f32>;
+type ListenerPos = Point2<f64>;
 
 pub struct AudioPlayer {
     device: cpal::Device,
     pub config: cpal::SupportedStreamConfig,
     stream: Option<anyhow::Result<cpal::Stream>>,
+    listener_pos: ListenerPos,
     pub enable_band_pass_filter: Arc<AtomicBool>,
     pub num_frames_per_callback: Arc<AtomicUsize>,
     ring_buffers: Option<RingBuffersNonRealTimeSides>,
@@ -19,12 +23,14 @@ pub struct AudioPlayer {
 
 struct RingBuffersNonRealTimeSides {
     disposal_queue_consumer: rtrb::Consumer<SamplingFunction>,
+    listener_pos_producer: rtrb::Producer<ListenerPos>,
     sampling_function_producer: rtrb::Producer<SamplingFunction>,
     to_ui_consumer: rtrb::Consumer<(f32, f32, f32, f32)>,
 }
 
 struct RingBuffersRealTimeSides {
     disposal_queue_producer: rtrb::Producer<SamplingFunction>,
+    listener_pos_consumer: rtrb::Consumer<ListenerPos>,
     sampling_function_consumer: rtrb::Consumer<SamplingFunction>,
     to_ui_producer: rtrb::Producer<(f32, f32, f32, f32)>,
 }
@@ -49,6 +55,7 @@ impl AudioPlayer {
             config,
             stream: None,
             ring_buffers: None,
+            listener_pos: Point2::new(0.0, 0.0),
             enable_band_pass_filter: Arc::new(AtomicBool::new(true)),
             num_frames_per_callback: Arc::new(AtomicUsize::new(0)),
         };
@@ -60,15 +67,19 @@ impl AudioPlayer {
         puffin::profile_function!();
         let (disposal_queue_producer, disposal_queue_consumer) = rtrb::RingBuffer::new(2);
         let (sampling_function_producer, sampling_function_consumer) = rtrb::RingBuffer::new(2);
+        let (mut listener_pos_producer, listener_pos_consumer) = rtrb::RingBuffer::new(100);
+        listener_pos_producer.push(self.listener_pos).unwrap(); // Initialize listener position
         let (to_ui_producer, to_ui_consumer) =
             rtrb::RingBuffer::new(self.config.sample_rate().0 as usize);
         self.ring_buffers = Some(RingBuffersNonRealTimeSides {
             disposal_queue_consumer,
             sampling_function_producer,
+            listener_pos_producer,
             to_ui_consumer,
         });
         let realtime_sides = RingBuffersRealTimeSides {
             disposal_queue_producer,
+            listener_pos_consumer,
             sampling_function_consumer,
             to_ui_producer,
         };
@@ -79,6 +90,7 @@ impl AudioPlayer {
                 self.enable_band_pass_filter.clone(),
                 self.num_frames_per_callback.clone(),
                 realtime_sides,
+                self.listener_pos,
             ),
             cpal::SampleFormat::I16 => run::<i16>(
                 &self.device,
@@ -86,6 +98,7 @@ impl AudioPlayer {
                 self.enable_band_pass_filter.clone(),
                 self.num_frames_per_callback.clone(),
                 realtime_sides,
+                self.listener_pos,
             ),
             cpal::SampleFormat::U16 => run::<u16>(
                 &self.device,
@@ -93,6 +106,7 @@ impl AudioPlayer {
                 self.enable_band_pass_filter.clone(),
                 self.num_frames_per_callback.clone(),
                 realtime_sides,
+                self.listener_pos,
             ),
         });
         Ok(())
@@ -119,6 +133,18 @@ impl AudioPlayer {
         }
     }
 
+    pub fn set_listener_pos(&mut self, listener_pos: ListenerPos) -> anyhow::Result<()> {
+        self.listener_pos = listener_pos;
+        if let Some(RingBuffersNonRealTimeSides {
+            listener_pos_producer,
+            ..
+        }) = &mut self.ring_buffers
+        {
+            listener_pos_producer.push(self.listener_pos)?;
+        }
+        Ok(())
+    }
+
     pub fn get_audio_history_entry(&mut self) -> Option<(f32, f32, f32, f32)> {
         if let Some(RingBuffersNonRealTimeSides { to_ui_consumer, .. }) = &mut self.ring_buffers {
             to_ui_consumer.pop().ok()
@@ -135,9 +161,11 @@ fn run<T>(
     num_frames_per_callback: Arc<AtomicUsize>,
     RingBuffersRealTimeSides {
         mut sampling_function_consumer,
+        mut listener_pos_consumer,
         mut disposal_queue_producer,
         mut to_ui_producer,
     }: RingBuffersRealTimeSides,
+    listener_pos: ListenerPos,
 ) -> anyhow::Result<cpal::Stream>
 where
     T: cpal::Sample,
@@ -160,6 +188,7 @@ where
     let mut moving_average2 = 0_f32;
     let mut moving_power_average_filtered = BASELINE;
     let mut moving_power_average_raw = BASELINE;
+    let mut listener_pos_after = listener_pos;
 
     puffin::profile_function!();
     let stream = device.build_output_stream(
@@ -173,13 +202,18 @@ where
                     disposal_queue_producer.push(old_sampling_function).unwrap();
                 }
             }
+            let listener_pos_before = listener_pos_after;
+            while let Ok(new_listener_pos) = listener_pos_consumer.pop() {
+                listener_pos_after = new_listener_pos;
+            }
 
             // Report num_frames_per_callback
-            num_frames_per_callback.store(data.len() / channels, Ordering::Relaxed);
+            let num_frames = data.len() / channels;
+            num_frames_per_callback.store(num_frames, Ordering::Relaxed);
 
-            let mut next_sample = || {
+            let mut next_sample = |listener_pos: ListenerPos| {
                 let value = if let Some(sampling_function) = &mut stored_sampling_function {
-                    let sample = sampling_function();
+                    let sample = sampling_function(listener_pos);
                     if sample.is_finite() {
                         sample
                     } else {
@@ -229,8 +263,10 @@ where
                 }
             };
 
-            for frame in data.chunks_mut(channels) {
-                let value: T = cpal::Sample::from::<f32>(&next_sample());
+            for (i, frame) in data.chunks_mut(channels).enumerate() {
+                let t = i as f64 / num_frames as f64;
+                let listener_pos = listener_pos_before * (1.0 - t) + listener_pos_after.coords * t;
+                let value: T = cpal::Sample::from::<f32>(&next_sample(listener_pos));
                 for sample in frame.iter_mut() {
                     *sample = value;
                 }

@@ -8,7 +8,7 @@ use eframe::{
     epi,
 };
 use egui::plot::{Line, Plot, Value, Values};
-use nalgebra::{self, DMatrix, DVector, Point2};
+use nalgebra::{self, DMatrix, DVector, Point2, Vector2};
 
 use crate::{
     audio_player::AudioPlayer,
@@ -252,14 +252,13 @@ impl epi::App for StiffPhysicsApp {
                     const SAMPLES_IN_BUFFER: usize = 1024;
                     const SPEED_OF_SOUND: f64 = 343.0;
                     let num_points = self.points.len();
-                    let listener_pos = self.listener_pos;
                     let meters_per_sample = SPEED_OF_SOUND / sample_rate;
                     let mut state_history = self
                         .simulation_state
                         .clone()
                         .resize_horizontally(SAMPLES_IN_BUFFER, 0.0);
                     let mut index_of_newest: usize = 0;
-                    let next_sample = move || {
+                    let next_sample = move |listener_pos: Point2<f64>| {
                         // Advance the simulation and record history
                         {
                             let read_index = index_of_newest;
@@ -284,7 +283,7 @@ impl epi::App for StiffPhysicsApp {
                                     // Abort if we find unwritten data
                                     break;
                                 }
-                                let relative_position = nalgebra::Vector2::new(
+                                let relative_position = Vector2::new(
                                     y[point_pos_loc] - listener_pos[0],
                                     y[point_pos_loc + 1] - listener_pos[1],
                                 );
@@ -294,7 +293,7 @@ impl epi::App for StiffPhysicsApp {
                                     let read_index_prev =
                                         (read_index + SAMPLES_IN_BUFFER - 1) % SAMPLES_IN_BUFFER;
                                     let y_prev = &state_history.column(read_index_prev);
-                                    let p0_acc = nalgebra::Vector2::new(
+                                    let p0_acc = Vector2::new(
                                         y[point_vel_loc] - y_prev[point_vel_loc],
                                         y[point_vel_loc + 1] - y_prev[point_vel_loc + 1],
                                     );
@@ -315,6 +314,7 @@ impl epi::App for StiffPhysicsApp {
                         value as f32
                     };
 
+                    player.set_listener_pos(self.listener_pos).unwrap();
                     player.play_audio(Box::new(next_sample)).unwrap();
                 }
             }
@@ -446,6 +446,9 @@ impl epi::App for StiffPhysicsApp {
                         let p = (pos - c) / r;
                         self.listener_pos.x = p.x as f64;
                         self.listener_pos.y = p.y as f64;
+                        if let Some(Ok(player)) = self.audio_player.lock().as_mut() {
+                            player.set_listener_pos(self.listener_pos).unwrap();
+                        }
                     }
                     GrabbedPoint::None => (),
                 }

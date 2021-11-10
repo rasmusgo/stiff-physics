@@ -12,11 +12,21 @@ pub struct AudioPlayer {
     device: cpal::Device,
     pub config: cpal::SupportedStreamConfig,
     stream: Option<anyhow::Result<cpal::Stream>>,
-    sampling_function_producer: Option<rtrb::Producer<SamplingFunction>>,
-    disposal_queue_consumer: Option<rtrb::Consumer<SamplingFunction>>,
-    pub to_ui_consumer: Option<rtrb::Consumer<(f32, f32, f32, f32)>>,
     pub enable_band_pass_filter: Arc<AtomicBool>,
     pub num_frames_per_callback: Arc<AtomicUsize>,
+    ring_buffers: Option<RingBuffersNonRealTimeSides>,
+}
+
+struct RingBuffersNonRealTimeSides {
+    disposal_queue_consumer: rtrb::Consumer<SamplingFunction>,
+    sampling_function_producer: rtrb::Producer<SamplingFunction>,
+    to_ui_consumer: rtrb::Consumer<(f32, f32, f32, f32)>,
+}
+
+struct RingBuffersRealTimeSides {
+    disposal_queue_producer: rtrb::Producer<SamplingFunction>,
+    sampling_function_consumer: rtrb::Consumer<SamplingFunction>,
+    to_ui_producer: rtrb::Producer<(f32, f32, f32, f32)>,
 }
 
 impl AudioPlayer {
@@ -38,9 +48,7 @@ impl AudioPlayer {
             device,
             config,
             stream: None,
-            sampling_function_producer: None,
-            disposal_queue_consumer: None,
-            to_ui_consumer: None,
+            ring_buffers: None,
             enable_band_pass_filter: Arc::new(AtomicBool::new(true)),
             num_frames_per_callback: Arc::new(AtomicUsize::new(0)),
         };
@@ -54,36 +62,37 @@ impl AudioPlayer {
         let (sampling_function_producer, sampling_function_consumer) = rtrb::RingBuffer::new(2);
         let (to_ui_producer, to_ui_consumer) =
             rtrb::RingBuffer::new(self.config.sample_rate().0 as usize);
-        self.disposal_queue_consumer = Some(disposal_queue_consumer);
-        self.sampling_function_producer = Some(sampling_function_producer);
-        self.to_ui_consumer = Some(to_ui_consumer);
+        self.ring_buffers = Some(RingBuffersNonRealTimeSides {
+            disposal_queue_consumer,
+            sampling_function_producer,
+            to_ui_consumer,
+        });
+        let realtime_sides = RingBuffersRealTimeSides {
+            disposal_queue_producer,
+            sampling_function_consumer,
+            to_ui_producer,
+        };
         self.stream = Some(match self.config.sample_format() {
             cpal::SampleFormat::F32 => run::<f32>(
                 &self.device,
                 &self.config.clone().into(),
                 self.enable_band_pass_filter.clone(),
-                sampling_function_consumer,
-                disposal_queue_producer,
-                to_ui_producer,
                 self.num_frames_per_callback.clone(),
+                realtime_sides,
             ),
             cpal::SampleFormat::I16 => run::<i16>(
                 &self.device,
                 &self.config.clone().into(),
                 self.enable_band_pass_filter.clone(),
-                sampling_function_consumer,
-                disposal_queue_producer,
-                to_ui_producer,
                 self.num_frames_per_callback.clone(),
+                realtime_sides,
             ),
             cpal::SampleFormat::U16 => run::<u16>(
                 &self.device,
                 &self.config.clone().into(),
                 self.enable_band_pass_filter.clone(),
-                sampling_function_consumer,
-                disposal_queue_producer,
-                to_ui_producer,
                 self.num_frames_per_callback.clone(),
+                realtime_sides,
             ),
         });
         Ok(())
@@ -91,27 +100,44 @@ impl AudioPlayer {
 
     pub fn play_audio(&mut self, next_sample: SamplingFunction) -> anyhow::Result<()> {
         puffin::profile_function!();
-        if let Some(disposal_queue) = &mut self.disposal_queue_consumer {
+        if let Some(RingBuffersNonRealTimeSides {
+            disposal_queue_consumer,
+            ..
+        }) = &mut self.ring_buffers
+        {
             // Old sampling functions are implicitly dropped here.
-            while disposal_queue.pop().is_ok() {}
+            while disposal_queue_consumer.pop().is_ok() {}
         }
-        match &mut self.sampling_function_producer {
-            Some(producer) => producer
+        match &mut self.ring_buffers {
+            Some(RingBuffersNonRealTimeSides {
+                sampling_function_producer,
+                ..
+            }) => sampling_function_producer
                 .push(next_sample)
                 .map_err(|_| anyhow!("Failed to push")),
             None => Err(anyhow!("Audio not initialized")),
         }
     }
+
+    pub fn get_audio_history_entry(&mut self) -> Option<(f32, f32, f32, f32)> {
+        if let Some(RingBuffersNonRealTimeSides { to_ui_consumer, .. }) = &mut self.ring_buffers {
+            to_ui_consumer.pop().ok()
+        } else {
+            None
+        }
+    }
 }
 
-pub fn run<T>(
+fn run<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     enable_band_pass_filter: Arc<AtomicBool>,
-    mut sampling_function_consumer: rtrb::Consumer<SamplingFunction>,
-    mut disposal_queue_producer: rtrb::Producer<SamplingFunction>,
-    mut to_ui_producer: rtrb::Producer<(f32, f32, f32, f32)>,
     num_frames_per_callback: Arc<AtomicUsize>,
+    RingBuffersRealTimeSides {
+        mut sampling_function_consumer,
+        mut disposal_queue_producer,
+        mut to_ui_producer,
+    }: RingBuffersRealTimeSides,
 ) -> anyhow::Result<cpal::Stream>
 where
     T: cpal::Sample,

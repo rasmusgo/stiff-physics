@@ -331,15 +331,13 @@ impl epi::App for StiffPhysicsApp {
                         .fetch_xor(true, Ordering::SeqCst);
                 }
                 let sample_rate = player.config.sample_rate().0 as usize;
-                if let Some(consumer) = &mut player.to_ui_consumer {
-                    while let Ok(data) = consumer.pop() {
-                        if self.audio_history.len() < sample_rate {
-                            self.audio_history.push(data);
-                        } else {
-                            self.audio_history[self.audio_history_index] = data;
-                            self.audio_history_index =
-                                (self.audio_history_index + 1) % self.audio_history.len();
-                        }
+                while let Some(data) = player.get_audio_history_entry() {
+                    if self.audio_history.len() < sample_rate {
+                        self.audio_history.push(data);
+                    } else {
+                        self.audio_history[self.audio_history_index] = data;
+                        self.audio_history_index =
+                            (self.audio_history_index + 1) % self.audio_history.len();
                     }
                 }
 

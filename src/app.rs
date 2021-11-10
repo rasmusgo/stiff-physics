@@ -39,6 +39,12 @@ const SPRINGS: [Spring; 3] = [
     },
 ];
 
+enum GrabbedPoint {
+    None,
+    PointMass(usize),
+    Listener,
+}
+
 pub struct StiffPhysicsApp {
     listener_pos: Point2<f64>,
     point_mass: f32,
@@ -55,7 +61,7 @@ pub struct StiffPhysicsApp {
     audio_history_resolution: usize,
     state_vector_producer: rtrb::Producer<DVector<f64>>,
     state_vector_consumer: rtrb::Consumer<DVector<f64>>,
-    grabbed_point: Option<usize>,
+    grabbed_point: GrabbedPoint,
 }
 
 impl Default for StiffPhysicsApp {
@@ -97,7 +103,7 @@ impl Default for StiffPhysicsApp {
             audio_history_resolution: 1000,
             state_vector_producer,
             state_vector_consumer,
-            grabbed_point: None,
+            grabbed_point: GrabbedPoint::None,
         }
     }
 }
@@ -413,24 +419,37 @@ impl epi::App for StiffPhysicsApp {
 
             if let Some(pos) = response.interact_pointer_pos() {
                 if response.drag_started() {
+                    let grabbed_point = &mut self.grabbed_point;
                     let mut best_norm2 = 15. * 15.;
-                    for (i, &mut p) in self.points.iter_mut().enumerate() {
+                    let mut test_point = |p: &Point2<f64>, id: GrabbedPoint| {
                         let point_in_pixels = c + vec2(p.x as f32, p.y as f32) * r;
                         let diff = pos - point_in_pixels;
                         let norm2 = diff.x * diff.x + diff.y * diff.y;
                         if norm2 <= best_norm2 {
                             best_norm2 = norm2;
-                            self.grabbed_point = Some(i);
+                            *grabbed_point = id;
                         }
+                    };
+                    for (i, p) in self.points.iter().enumerate() {
+                        test_point(p, GrabbedPoint::PointMass(i));
                     }
+                    test_point(&self.listener_pos, GrabbedPoint::Listener);
                 }
                 if response.drag_released() {
-                    self.grabbed_point = None;
+                    self.grabbed_point = GrabbedPoint::None;
                 }
-                if let Some(i) = self.grabbed_point {
-                    let p = (pos - c) / r;
-                    self.points[i].x = p.x as f64;
-                    self.points[i].y = p.y as f64;
+                match self.grabbed_point {
+                    GrabbedPoint::PointMass(i) => {
+                        let p = (pos - c) / r;
+                        self.points[i].x = p.x as f64;
+                        self.points[i].y = p.y as f64;
+                    }
+                    GrabbedPoint::Listener => {
+                        let p = (pos - c) / r;
+                        self.listener_pos.x = p.x as f64;
+                        self.listener_pos.y = p.y as f64;
+                    }
+                    GrabbedPoint::None => (),
                 }
             }
             if self.enable_simulation {

@@ -290,8 +290,7 @@ impl epi::App for StiffPhysicsApp {
                                 let distance_by_time = i as f64 * meters_per_sample;
                                 let distance_by_state = relative_position.norm();
                                 if distance_by_state < distance_by_time {
-                                    let read_index_prev =
-                                        (read_index + SAMPLES_IN_BUFFER - 1) % SAMPLES_IN_BUFFER;
+                                    let read_index_prev = (read_index + 1) % SAMPLES_IN_BUFFER;
                                     let y_prev = &state_history.column(read_index_prev);
                                     let p0_acc = Vector2::new(
                                         y[point_vel_loc] - y_prev[point_vel_loc],

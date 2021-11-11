@@ -6,7 +6,7 @@ use std::sync::{
 use anyhow::anyhow;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use nalgebra::{self, Point2};
+use nalgebra::{self, Point2, Vector2};
 
 type SamplingFunction = Box<dyn Send + FnMut(ListenerPos) -> f32>;
 type ListenerPos = Point2<f64>;
@@ -157,7 +157,7 @@ impl AudioPlayer {
 fn run<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    enable_band_pass_filter: Arc<AtomicBool>,
+    _enable_band_pass_filter: Arc<AtomicBool>,
     num_frames_per_callback: Arc<AtomicUsize>,
     RingBuffersRealTimeSides {
         mut sampling_function_consumer,
@@ -177,20 +177,26 @@ where
     let mut stored_sampling_function: Option<SamplingFunction> = None;
 
     // Exponential moving average band-pass filtering
-    const ALPHA1: f32 = 0.01;
-    const ALPHA2: f32 = 0.001;
+    // const ALPHA1: f32 = 0.01;
+    // const ALPHA2: f32 = 0.001;
     const ALPHA_ATTACK: f32 = 0.01;
     const ALPHA_RELEASE: f32 = 0.0001;
     const BASELINE: f32 = 0.1;
     const HEADROOM_FRACTION: f32 = 0.25;
     const HEADROOM_FACTOR: f32 = 1.0 - HEADROOM_FRACTION;
-    let mut moving_average1 = 0_f32;
-    let mut moving_average2 = 0_f32;
-    let mut moving_power_average_filtered = BASELINE;
+    // let mut moving_average1 = 0_f32;
+    // let mut moving_average2 = 0_f32;
+    // let mut moving_power_average_filtered = BASELINE;
     let mut moving_power_average_raw = BASELINE;
     let mut listener_pos_after = listener_pos;
 
-    puffin::profile_function!();
+    let offsets_by_channel = match channels {
+        1 => vec![Vector2::zeros()],
+        2 => vec![Vector2::new(-0.1, 0.0), Vector2::new(0.1, 0.0)],
+        _ => panic!("Cannot handle {} channels", channels),
+    };
+    let mut sample_by_channel = vec![0.0; channels];
+
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
@@ -211,65 +217,65 @@ where
             let num_frames = data.len() / channels;
             num_frames_per_callback.store(num_frames, Ordering::Relaxed);
 
-            let mut next_sample = |listener_pos: ListenerPos| {
-                let value = if let Some(sampling_function) = &mut stored_sampling_function {
-                    let sample = sampling_function(listener_pos);
-                    if sample.is_finite() {
-                        sample
-                    } else {
-                        0_f32
+            if let Some(sampling_function) = &mut stored_sampling_function {
+                for (i, frame) in data.chunks_mut(channels).enumerate() {
+                    // Interpolate listener position
+                    let t = i as f64 / num_frames as f64;
+                    let listener_pos =
+                        listener_pos_before * (1.0 - t) + listener_pos_after.coords * t;
+
+                    // Sample each channel with offset on listener position
+                    for channel in 0..channels {
+                        sample_by_channel[channel] = {
+                            let sample =
+                                sampling_function(listener_pos + offsets_by_channel[channel]);
+                            if sample.is_finite() {
+                                sample
+                            } else {
+                                0_f32
+                            }
+                        };
                     }
-                } else {
-                    0_f32
-                };
-                moving_average1 = moving_average1 * (1.0 - ALPHA1) + value * ALPHA1;
-                moving_average2 = moving_average2 * (1.0 - ALPHA2) + value * ALPHA2;
-                let filtered_value = moving_average1 - moving_average2;
-                let filtered_tall_puppy = filtered_value.abs() + BASELINE;
-                if filtered_tall_puppy > moving_power_average_filtered {
-                    moving_power_average_filtered = moving_power_average_filtered
-                        * (1.0 - ALPHA_ATTACK)
-                        + filtered_tall_puppy * ALPHA_ATTACK;
-                } else {
-                    moving_power_average_filtered = moving_power_average_filtered
-                        * (1.0 - ALPHA_RELEASE)
-                        + filtered_tall_puppy * ALPHA_RELEASE;
-                }
-                let raw_tall_puppy = value.abs() + BASELINE;
-                if raw_tall_puppy > moving_power_average_raw {
-                    moving_power_average_raw = moving_power_average_raw * (1.0 - ALPHA_ATTACK)
-                        + raw_tall_puppy * ALPHA_ATTACK;
-                } else {
-                    moving_power_average_raw = moving_power_average_raw * (1.0 - ALPHA_RELEASE)
-                        + raw_tall_puppy * ALPHA_RELEASE;
-                }
 
-                let normalized_filtered_value =
-                    HEADROOM_FACTOR * filtered_value / moving_power_average_filtered;
-                let normalized_value = HEADROOM_FACTOR * value / moving_power_average_raw;
+                    // TODO: Band-pass filter
 
-                // Try to push but ignore if it works or not.
-                let _ = to_ui_producer.push((
-                    normalized_value,
-                    normalized_filtered_value,
-                    moving_power_average_raw,
-                    moving_power_average_filtered,
-                ));
+                    // Adjust volume jointly
+                    let raw_tall_puppy = sample_by_channel
+                        .iter()
+                        .map(|x| x.abs())
+                        .fold(0.0, f32::max)
+                        + BASELINE;
+                    if raw_tall_puppy > moving_power_average_raw {
+                        moving_power_average_raw = moving_power_average_raw * (1.0 - ALPHA_ATTACK)
+                            + raw_tall_puppy * ALPHA_ATTACK;
+                    } else {
+                        moving_power_average_raw = moving_power_average_raw * (1.0 - ALPHA_RELEASE)
+                            + raw_tall_puppy * ALPHA_RELEASE;
+                    }
 
-                if enable_band_pass_filter.load(Ordering::Relaxed) {
-                    normalized_filtered_value
-                } else {
-                    normalized_value
+                    let normalization = HEADROOM_FACTOR / moving_power_average_raw;
+                    for sample in &mut sample_by_channel {
+                        *sample *= normalization;
+                    }
+
+                    // Try to push but ignore if it works or not.
+                    let _ = to_ui_producer.push((
+                        sample_by_channel[0],
+                        if channels >= 2 {
+                            sample_by_channel[1]
+                        } else {
+                            0.0
+                        },
+                        moving_power_average_raw,
+                        normalization,
+                    ));
+
+                    for (channel, sample) in frame.iter_mut().enumerate() {
+                        *sample = cpal::Sample::from::<f32>(&sample_by_channel[channel]);
+                    }
                 }
-            };
-
-            for (i, frame) in data.chunks_mut(channels).enumerate() {
-                let t = i as f64 / num_frames as f64;
-                let listener_pos = listener_pos_before * (1.0 - t) + listener_pos_after.coords * t;
-                let value: T = cpal::Sample::from::<f32>(&next_sample(listener_pos));
-                for sample in frame.iter_mut() {
-                    *sample = value;
-                }
+            } else {
+                data.fill(cpal::Sample::from::<f32>(&0.0));
             }
         },
         err_fn,

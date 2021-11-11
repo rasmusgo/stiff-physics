@@ -275,7 +275,7 @@ impl epi::App for StiffPhysicsApp {
                             let point_pos_loc = point_index * D;
                             let point_vel_loc = num_points * D + point_index * D;
 
-                            for i in 1..SAMPLES_IN_BUFFER {
+                            for i in 2..SAMPLES_IN_BUFFER {
                                 let read_index =
                                     (index_of_newest + SAMPLES_IN_BUFFER - i) % SAMPLES_IN_BUFFER;
                                 let y = &state_history.column(read_index);
@@ -291,14 +291,32 @@ impl epi::App for StiffPhysicsApp {
                                 let distance_by_state = relative_position.norm();
                                 if distance_by_state < distance_by_time {
                                     let read_index_prev = (read_index + 1) % SAMPLES_IN_BUFFER;
+                                    let read_index_prev_prev = (read_index + 2) % SAMPLES_IN_BUFFER;
                                     let y_prev = &state_history.column(read_index_prev);
-                                    let p0_acc = Vector2::new(
+                                    let y_prev_prev = &state_history.column(read_index_prev_prev);
+                                    let relative_position_prev = Vector2::new(
+                                        y_prev[point_pos_loc] - listener_pos[0],
+                                        y_prev[point_pos_loc + 1] - listener_pos[1],
+                                    );
+                                    let distance_by_state_prev = relative_position_prev.norm();
+                                    let t = (distance_by_time - distance_by_state)
+                                        / (distance_by_state_prev - distance_by_state
+                                            + meters_per_sample);
+
+                                    let acc_prev = Vector2::new(
+                                        y_prev[point_vel_loc] - y_prev_prev[point_vel_loc],
+                                        y_prev[point_vel_loc + 1] - y_prev_prev[point_vel_loc + 1],
+                                    );
+                                    let acc = Vector2::new(
                                         y[point_vel_loc] - y_prev[point_vel_loc],
                                         y[point_vel_loc + 1] - y_prev[point_vel_loc + 1],
                                     );
-                                    let direction = relative_position.normalize();
-                                    value += p0_acc.dot(&direction)
-                                        / (distance_by_time * distance_by_time);
+                                    let interpolated_relative_position = relative_position
+                                        + t * (relative_position_prev - relative_position);
+                                    let interpolated_acc = acc + t * (acc_prev - acc);
+                                    let direction = interpolated_relative_position.normalize();
+                                    value += interpolated_acc.dot(&direction)
+                                        / interpolated_relative_position.norm_squared();
                                     break;
                                 }
                             }

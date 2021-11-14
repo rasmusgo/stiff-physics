@@ -8,7 +8,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use nalgebra::{self, Point2, Vector2};
 
-type SamplingFunction = Box<dyn Send + FnMut(ListenerPos) -> f32>;
+type SamplingFunction = Box<dyn Send + FnMut(bool, ListenerPos) -> f32>;
 type ListenerPos = Point2<f64>;
 
 pub struct AudioPlayer {
@@ -228,8 +228,10 @@ where
                     // Sample each channel with offset on listener position
                     for channel in 0..channels {
                         sample_by_channel[channel] = {
-                            let sample =
-                                sampling_function(listener_pos + offsets_by_channel[channel]);
+                            let sample = sampling_function(
+                                channel == 0,
+                                listener_pos + offsets_by_channel[channel],
+                            );
                             if sample.is_finite() {
                                 sample
                             } else {

@@ -258,9 +258,9 @@ impl epi::App for StiffPhysicsApp {
                         .clone()
                         .resize_horizontally(SAMPLES_IN_BUFFER, 0.0);
                     let mut index_of_newest: usize = 0;
-                    let next_sample = move |listener_pos: Point2<f64>| {
+                    let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
                         // Advance the simulation and record history
-                        {
+                        if update_state {
                             let read_index = index_of_newest;
                             let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
                             let (y, mut y_next) =

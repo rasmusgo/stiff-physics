@@ -491,7 +491,7 @@ impl epi::App for StiffPhysicsApp {
             draw_particle_system(&self.points, &self.springs, line_width, &painter, c, r);
 
             let p = egui::Vec2::new(self.listener_pos.x as f32, self.listener_pos.y as f32);
-            let circle_radius = r * 0.05;
+            let circle_radius = r * 0.1;
             let stroke = Stroke::new(line_width, Color32::BLACK);
             painter.circle(c + p * r, circle_radius, Color32::GOLD, stroke);
 

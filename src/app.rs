@@ -258,6 +258,7 @@ impl epi::App for StiffPhysicsApp {
                         .clone()
                         .resize_horizontally(SAMPLES_IN_BUFFER, 0.0);
                     let mut index_of_newest: usize = 0;
+                    let mut num_samples_recorded: usize = 1;
                     let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
                         // Advance the simulation and record history
                         if update_state {
@@ -267,6 +268,7 @@ impl epi::App for StiffPhysicsApp {
                                 state_history.columns_range_pair_mut(read_index, write_index);
                             y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
                             index_of_newest = write_index;
+                            num_samples_recorded = SAMPLES_IN_BUFFER.min(num_samples_recorded + 1);
                         }
 
                         // Traverse history to find the waves that are contributing to what the listener should be hearing right now.
@@ -275,14 +277,10 @@ impl epi::App for StiffPhysicsApp {
                             let point_pos_loc = point_index * D;
                             let point_vel_loc = num_points * D + point_index * D;
 
-                            for i in 2..SAMPLES_IN_BUFFER {
+                            for i in 2..num_samples_recorded {
                                 let read_index =
                                     (index_of_newest + SAMPLES_IN_BUFFER - i) % SAMPLES_IN_BUFFER;
                                 let y = &state_history.column(read_index);
-                                if y[y.nrows() - 1] == 0.0 {
-                                    // Abort if we find unwritten data
-                                    break;
-                                }
                                 let relative_position = Vector2::new(
                                     y[point_pos_loc] - listener_pos[0],
                                     y[point_pos_loc + 1] - listener_pos[1],

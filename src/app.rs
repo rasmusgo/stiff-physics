@@ -120,6 +120,10 @@ impl epi::App for StiffPhysicsApp {
         _frame: &mut epi::Frame<'_>,
         _storage: Option<&dyn epi::Storage>,
     ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            *self.audio_player.lock() = Some(AudioPlayer::new());
+        }
     }
 
     /// Called each time the UI needs repainting, which may be many times per second.

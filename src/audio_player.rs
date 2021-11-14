@@ -157,7 +157,7 @@ impl AudioPlayer {
 fn run<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    _enable_band_pass_filter: Arc<AtomicBool>,
+    enable_band_pass_filter: Arc<AtomicBool>,
     num_frames_per_callback: Arc<AtomicUsize>,
     RingBuffersRealTimeSides {
         mut sampling_function_consumer,
@@ -177,16 +177,14 @@ where
     let mut stored_sampling_function: Option<SamplingFunction> = None;
 
     // Exponential moving average band-pass filtering
-    // const ALPHA1: f32 = 0.01;
-    // const ALPHA2: f32 = 0.001;
-    const ALPHA_ATTACK: f32 = 0.01;
+    const ALPHA1: f32 = 0.01;
+    const ALPHA2: f32 = 0.001;
+    const ALPHA_ATTACK: f32 = 0.1;
     const ALPHA_RELEASE: f32 = 0.0001;
     const BASELINE: f32 = 0.1;
     const HEADROOM_FRACTION: f32 = 0.25;
     const HEADROOM_FACTOR: f32 = 1.0 - HEADROOM_FRACTION;
-    // let mut moving_average1 = 0_f32;
-    // let mut moving_average2 = 0_f32;
-    // let mut moving_power_average_filtered = BASELINE;
+    let mut moving_power_average_filtered = BASELINE;
     let mut moving_power_average_raw = BASELINE;
     let mut listener_pos_after = listener_pos;
 
@@ -196,6 +194,9 @@ where
         _ => panic!("Cannot handle {} channels", channels),
     };
     let mut sample_by_channel = vec![0.0; channels];
+    let mut filtered_sample_by_channel = vec![0.0; channels];
+    let mut moving_average1 = vec![0_f32; channels];
+    let mut moving_average2 = vec![0_f32; channels];
 
     let stream = device.build_output_stream(
         config,
@@ -237,9 +238,18 @@ where
                         };
                     }
 
-                    // TODO: Band-pass filter
+                    // Band-pass filter
+                    for channel in 0..channels {
+                        let value = sample_by_channel[channel];
+                        moving_average1[channel] =
+                            moving_average1[channel] * (1.0 - ALPHA1) + value * ALPHA1;
+                        moving_average2[channel] =
+                            moving_average2[channel] * (1.0 - ALPHA2) + value * ALPHA2;
+                        filtered_sample_by_channel[channel] =
+                            moving_average1[channel] - moving_average2[channel];
+                    }
 
-                    // Adjust volume jointly
+                    // Adjust volume jointly over raw samples
                     let raw_tall_puppy = sample_by_channel
                         .iter()
                         .map(|x| x.abs())
@@ -252,10 +262,29 @@ where
                         moving_power_average_raw = moving_power_average_raw * (1.0 - ALPHA_RELEASE)
                             + raw_tall_puppy * ALPHA_RELEASE;
                     }
-
                     let normalization = HEADROOM_FACTOR / moving_power_average_raw;
                     for sample in &mut sample_by_channel {
                         *sample *= normalization;
+                    }
+
+                    // Adjust volume jointly over filtered samples
+                    let filtered_tall_puppy = filtered_sample_by_channel
+                        .iter()
+                        .map(|x| x.abs())
+                        .fold(0.0, f32::max)
+                        + BASELINE;
+                    if filtered_tall_puppy > moving_power_average_filtered {
+                        moving_power_average_filtered = moving_power_average_filtered
+                            * (1.0 - ALPHA_ATTACK)
+                            + filtered_tall_puppy * ALPHA_ATTACK;
+                    } else {
+                        moving_power_average_filtered = moving_power_average_filtered
+                            * (1.0 - ALPHA_RELEASE)
+                            + filtered_tall_puppy * ALPHA_RELEASE;
+                    }
+                    let normalization_filtered = HEADROOM_FACTOR / moving_power_average_filtered;
+                    for sample in &mut filtered_sample_by_channel {
+                        *sample *= normalization_filtered;
                     }
 
                     // Try to push but ignore if it works or not.
@@ -270,8 +299,15 @@ where
                         normalization,
                     ));
 
-                    for (channel, sample) in frame.iter_mut().enumerate() {
-                        *sample = cpal::Sample::from::<f32>(&sample_by_channel[channel]);
+                    if enable_band_pass_filter.load(Ordering::Relaxed) {
+                        for (channel, sample) in frame.iter_mut().enumerate() {
+                            *sample =
+                                cpal::Sample::from::<f32>(&filtered_sample_by_channel[channel]);
+                        }
+                    } else {
+                        for (channel, sample) in frame.iter_mut().enumerate() {
+                            *sample = cpal::Sample::from::<f32>(&sample_by_channel[channel]);
+                        }
                     }
                 }
             } else {

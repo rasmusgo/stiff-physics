@@ -55,7 +55,7 @@ impl AudioPlayer {
             config,
             stream: None,
             ring_buffers: None,
-            listener_pos: Point2::new(0.0, 0.0),
+            listener_pos: Point2::new(0.0, 1.0), // FIXME: This is duplicated from app.rs
             enable_band_pass_filter: Arc::new(AtomicBool::new(true)),
             num_frames_per_callback: Arc::new(AtomicUsize::new(0)),
         };

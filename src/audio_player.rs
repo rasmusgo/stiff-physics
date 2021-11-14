@@ -255,8 +255,7 @@ where
                     let raw_tall_puppy = sample_by_channel
                         .iter()
                         .map(|x| x.abs())
-                        .fold(0.0, f32::max)
-                        + BASELINE;
+                        .fold(BASELINE, f32::max);
                     if raw_tall_puppy > moving_power_average_raw {
                         moving_power_average_raw = moving_power_average_raw * (1.0 - ALPHA_ATTACK)
                             + raw_tall_puppy * ALPHA_ATTACK;
@@ -270,8 +269,7 @@ where
                     let filtered_tall_puppy = filtered_sample_by_channel
                         .iter()
                         .map(|x| x.abs())
-                        .fold(0.0, f32::max)
-                        + BASELINE;
+                        .fold(BASELINE, f32::max);
                     if filtered_tall_puppy > moving_power_average_filtered {
                         moving_power_average_filtered = moving_power_average_filtered
                             * (1.0 - ALPHA_ATTACK)

@@ -179,7 +179,7 @@ where
     // Exponential moving average band-pass filtering
     const ALPHA1: f32 = 0.01;
     const ALPHA2: f32 = 0.001;
-    const ALPHA_ATTACK: f32 = 0.1;
+    const ALPHA_ATTACK: f32 = 1.0;
     const ALPHA_RELEASE: f32 = 0.0001;
     const BASELINE: f32 = 0.1;
     const HEADROOM_FRACTION: f32 = 0.25;

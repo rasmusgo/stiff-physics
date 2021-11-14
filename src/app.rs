@@ -20,22 +20,22 @@ const SPRINGS: [Spring; 3] = [
         p1: 0,
         p2: 1,
         length: 1.0,
-        k: 500.0,
-        d: 0.1,
+        k: 5000.0,
+        d: 0.5,
     },
     Spring {
         p1: 1,
         p2: 2,
         length: 1.0,
         k: 5000.0,
-        d: 0.1,
+        d: 0.5,
     },
     Spring {
         p1: 2,
         p2: 0,
         length: 1.0,
-        k: 200.0,
-        d: 0.1,
+        k: 10000.0,
+        d: 0.5,
     },
 ];
 
@@ -89,7 +89,7 @@ impl Default for StiffPhysicsApp {
 
         Self {
             listener_pos,
-            point_mass: 0.01,
+            point_mass: 0.1,
             points,
             springs,
             relaxed_points,
@@ -171,7 +171,7 @@ impl epi::App for StiffPhysicsApp {
             }
             for spring in &mut self.springs {
                 ui.add(egui::Slider::new(&mut spring.k, 0.0..=100000.0).text("spring_constant"));
-                ui.add(egui::Slider::new(&mut spring.d, 0.0..=100000.0).text("damping"));
+                ui.add(egui::Slider::new(&mut spring.d, 0.0..=10.0).text("damping"));
             }
             ui.add(egui::Slider::new(&mut self.point_mass, 0.01..=10.0).text("point_mass"));
 
@@ -421,7 +421,7 @@ impl epi::App for StiffPhysicsApp {
             let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
             let rect = response.rect;
             let c = rect.center();
-            let r = rect.width() / 2. - 1.;
+            let r = rect.width() / 5.0 - 2.5;
             let line_width = f32::max(r / 500., 1.0);
 
             if let Some(pos) = response.interact_pointer_pos() {

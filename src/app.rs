@@ -193,7 +193,7 @@ impl epi::App for StiffPhysicsApp {
                     .clicked()
                 })
                 .inner;
-            if clicked_simulate {
+            if clicked_simulate || ctx.input().key_pressed(egui::Key::Space) {
                 puffin::profile_scope!("start simulation");
                 let point_masses = [self.point_mass as f64].repeat(self.points.len());
                 let y0 = new_state_vector_from_points(&self.relaxed_points);

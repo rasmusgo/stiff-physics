@@ -265,9 +265,6 @@ where
                             + raw_tall_puppy * ALPHA_RELEASE;
                     }
                     let normalization = HEADROOM_FACTOR / moving_power_average_raw;
-                    for sample in &mut sample_by_channel {
-                        *sample *= normalization;
-                    }
 
                     // Adjust volume jointly over filtered samples
                     let filtered_tall_puppy = filtered_sample_by_channel
@@ -285,9 +282,6 @@ where
                             + filtered_tall_puppy * ALPHA_RELEASE;
                     }
                     let normalization_filtered = HEADROOM_FACTOR / moving_power_average_filtered;
-                    for sample in &mut filtered_sample_by_channel {
-                        *sample *= normalization_filtered;
-                    }
 
                     // Try to push but ignore if it works or not.
                     let _ = to_ui_producer.push((
@@ -298,8 +292,15 @@ where
                             0.0
                         },
                         moving_power_average_raw,
-                        normalization,
+                        moving_power_average_filtered,
                     ));
+
+                    for sample in &mut sample_by_channel {
+                        *sample *= normalization;
+                    }
+                    for sample in &mut filtered_sample_by_channel {
+                        *sample *= normalization_filtered;
+                    }
 
                     if enable_band_pass_filter.load(Ordering::Relaxed) {
                         for (channel, sample) in frame.iter_mut().enumerate() {

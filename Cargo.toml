@@ -15,8 +15,8 @@ cpal = { version = "0.13.4", features = ["wasm-bindgen"] }
 eframe = "0.15.0" # Gives us egui, epi and web+native backends
 hyperdual = "0.5.0"
 nalgebra = "0.29"
-puffin = "0.11"
-puffin_egui = "0.10"
+puffin = "0.12.1"
+puffin_egui = "0.11.0"
 rtrb = "0.2.0"
 serde = { version = "1", features = ["derive"], optional = true }
 

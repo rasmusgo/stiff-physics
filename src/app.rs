@@ -461,8 +461,10 @@ impl StiffPhysicsApp {
                             y[point_pos_loc + 1] - listener_pos[1],
                         );
                         let distance_by_time = i as f64 * meters_per_sample;
-                        let distance_by_state = relative_position.norm();
-                        if distance_by_state < distance_by_time {
+                        let distance_by_time_squared = distance_by_time * distance_by_time;
+
+                        let distance_by_state_squared = relative_position.norm_squared();
+                        if distance_by_state_squared < distance_by_time_squared {
                             let read_index_prev = (read_index + 1) % SAMPLES_IN_BUFFER;
                             let read_index_prev_prev = (read_index + 2) % SAMPLES_IN_BUFFER;
                             let y_prev = &state_history.column(read_index_prev);
@@ -471,6 +473,7 @@ impl StiffPhysicsApp {
                                 y_prev[point_pos_loc] - listener_pos[0],
                                 y_prev[point_pos_loc + 1] - listener_pos[1],
                             );
+                            let distance_by_state = distance_by_state_squared.sqrt();
                             let distance_by_state_prev = relative_position_prev.norm();
                             let t = (distance_by_time - distance_by_state)
                                 / (distance_by_state_prev - distance_by_state + meters_per_sample);

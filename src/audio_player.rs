@@ -5,8 +5,8 @@ use std::sync::{
 
 use anyhow::anyhow;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-
 use nalgebra::{self, Point2, Vector2};
+use triple_buffer as tbuf;
 
 type SamplingFunction = Box<dyn Send + FnMut(bool, ListenerPos) -> f32>;
 type ListenerPos = Point2<f64>;
@@ -22,16 +22,14 @@ pub struct AudioPlayer {
 }
 
 struct RingBuffersNonRealTimeSides {
-    disposal_queue_consumer: rtrb::Consumer<SamplingFunction>,
     listener_pos_producer: rtrb::Producer<ListenerPos>,
-    sampling_function_producer: rtrb::Producer<SamplingFunction>,
+    sampling_function_producer: tbuf::Input<Option<SamplingFunction>>,
     to_ui_consumer: rtrb::Consumer<(f32, f32, f32, f32)>,
 }
 
 struct RingBuffersRealTimeSides {
-    disposal_queue_producer: rtrb::Producer<SamplingFunction>,
     listener_pos_consumer: rtrb::Consumer<ListenerPos>,
-    sampling_function_consumer: rtrb::Consumer<SamplingFunction>,
+    sampling_function_consumer: tbuf::Output<Option<SamplingFunction>>,
     to_ui_producer: rtrb::Producer<(f32, f32, f32, f32)>,
 }
 
@@ -65,20 +63,20 @@ impl AudioPlayer {
 
     fn start_output_stream(&mut self) -> anyhow::Result<()> {
         puffin::profile_function!();
-        let (disposal_queue_producer, disposal_queue_consumer) = rtrb::RingBuffer::new(2);
-        let (sampling_function_producer, sampling_function_consumer) = rtrb::RingBuffer::new(2);
+        let (sampling_function_producer, sampling_function_consumer) =
+            tbuf::TripleBuffer::<Option<SamplingFunction>>::default().split();
+        // let (disposal_queue_producer, disposal_queue_consumer) = rtrb::RingBuffer::new(2);
+        // let (sampling_function_producer, sampling_function_consumer) = rtrb::RingBuffer::new(2);
         let (mut listener_pos_producer, listener_pos_consumer) = rtrb::RingBuffer::new(100);
         listener_pos_producer.push(self.listener_pos).unwrap(); // Initialize listener position
         let (to_ui_producer, to_ui_consumer) =
             rtrb::RingBuffer::new(self.config.sample_rate().0 as usize);
         self.ring_buffers = Some(RingBuffersNonRealTimeSides {
-            disposal_queue_consumer,
             sampling_function_producer,
             listener_pos_producer,
             to_ui_consumer,
         });
         let realtime_sides = RingBuffersRealTimeSides {
-            disposal_queue_producer,
             listener_pos_consumer,
             sampling_function_consumer,
             to_ui_producer,
@@ -115,21 +113,14 @@ impl AudioPlayer {
     pub fn play_audio(&mut self, next_sample: SamplingFunction) -> anyhow::Result<()> {
         puffin::profile_function!();
         if let Some(RingBuffersNonRealTimeSides {
-            disposal_queue_consumer,
+            sampling_function_producer,
             ..
         }) = &mut self.ring_buffers
         {
-            // Old sampling functions are implicitly dropped here.
-            while disposal_queue_consumer.pop().is_ok() {}
-        }
-        match &mut self.ring_buffers {
-            Some(RingBuffersNonRealTimeSides {
-                sampling_function_producer,
-                ..
-            }) => sampling_function_producer
-                .push(next_sample)
-                .map_err(|_| anyhow!("Failed to push")),
-            None => Err(anyhow!("Audio not initialized")),
+            sampling_function_producer.write(Some(next_sample));
+            Ok(())
+        } else {
+            Err(anyhow!("Audio not initialized"))
         }
     }
 
@@ -162,7 +153,6 @@ fn run<T>(
     RingBuffersRealTimeSides {
         mut sampling_function_consumer,
         mut listener_pos_consumer,
-        mut disposal_queue_producer,
         mut to_ui_producer,
     }: RingBuffersRealTimeSides,
     listener_pos: ListenerPos,
@@ -173,8 +163,6 @@ where
     puffin::profile_function!();
     let channels = config.channels as usize;
     let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
-
-    let mut stored_sampling_function: Option<SamplingFunction> = None;
 
     // Exponential moving average band-pass filtering
     const ALPHA1: f32 = 0.01;
@@ -202,13 +190,6 @@ where
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             puffin::profile_function!();
-            if let Ok(new_sampling_function) = sampling_function_consumer.pop() {
-                if let Some(old_sampling_function) =
-                    std::mem::replace(&mut stored_sampling_function, Some(new_sampling_function))
-                {
-                    disposal_queue_producer.push(old_sampling_function).unwrap();
-                }
-            }
             let listener_pos_before = listener_pos_after;
             while let Ok(new_listener_pos) = listener_pos_consumer.pop() {
                 listener_pos_after = new_listener_pos;
@@ -218,7 +199,11 @@ where
             let num_frames = data.len() / channels;
             num_frames_per_callback.store(num_frames, Ordering::Relaxed);
 
-            if let Some(sampling_function) = &mut stored_sampling_function {
+            // Manually fetch the buffer update because we are using output_buffer() instead of read()
+            sampling_function_consumer.update();
+
+            // Acquire a mutable reference to the output buffer so that we can call the sampling function
+            if let Some(sampling_function) = &mut sampling_function_consumer.output_buffer() {
                 for (i, frame) in data.chunks_mut(channels).enumerate() {
                     // Interpolate listener position
                     let t = i as f64 / num_frames as f64;

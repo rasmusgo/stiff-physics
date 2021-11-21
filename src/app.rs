@@ -427,6 +427,7 @@ impl StiffPhysicsApp {
             let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
                 // Advance the simulation and record history
                 if update_state {
+                    puffin::profile_scope!("Update state");
                     let read_index = index_of_newest;
                     let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
                     let (y, mut y_next) =
@@ -434,6 +435,15 @@ impl StiffPhysicsApp {
                     y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
                     index_of_newest = write_index;
                     num_samples_recorded = SAMPLES_IN_BUFFER.min(num_samples_recorded + 1);
+
+                    if !to_ui_producer.is_full() {
+                        puffin::profile_scope!("Send state to UI");
+                        if let Ok(mut state_storage) = to_audio_consumer.pop() {
+                            // Put an up to date state vector in the provided storage and send it back.
+                            state_storage.set_column(0, &state_history.column(index_of_newest));
+                            to_ui_producer.push(state_storage).unwrap();
+                        }
+                    }
                 }
 
                 // Traverse history to find the waves that are contributing to what the listener should be hearing right now.
@@ -481,13 +491,6 @@ impl StiffPhysicsApp {
                                 / interpolated_relative_position.norm_squared();
                             break;
                         }
-                    }
-                }
-                if !to_ui_producer.is_full() {
-                    if let Ok(mut state_storage) = to_audio_consumer.pop() {
-                        // Put an up to date state vector in the provided storage and send it back.
-                        state_storage.set_column(0, &state_history.column(index_of_newest));
-                        to_ui_producer.push(state_storage).unwrap();
                     }
                 }
                 value as f32

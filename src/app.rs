@@ -199,144 +199,7 @@ impl epi::App for StiffPhysicsApp {
                 })
                 .inner;
             if clicked_simulate || ctx.input().key_pressed(egui::Key::Space) {
-                puffin::profile_scope!("start simulation");
-                let point_masses = [self.point_mass as f64].repeat(self.points.len());
-                let y0 = new_state_vector_from_points(&self.relaxed_points);
-                let mat_a = create_diff_eq_system_around_y0(&y0, &point_masses, &self.springs);
-                self.simulation_state = new_state_vector_from_points(&self.points);
-                {
-                    puffin::profile_scope!("exp_a_sim_step");
-                    self.exp_a_sim_step = (mat_a.clone() * 0.01).exp();
-                }
-                {
-                    puffin::profile_scope!("exp_a_audio_step");
-                    self.exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
-                }
-                self.enable_simulation = true;
-                // println!("{:?}", mat_a);
-                // println!("{:?}", &*mat_a * &*simulation_state);
-
-                // Create communication channel to send back simulation state to UI.
-                //      UI thread               Audio thread
-                //      ---------               ------------
-                //  Allocate state vector            .
-                //         |                         .
-                // to_audio_producer -------> to_audio_consumer
-                //         .                         |
-                //         .               Swap with up to date vector
-                //         .                         |
-                //   to_ui_consumer <--------- to_ui_producer
-                //         |                         .
-                //    Draw graphics                  .
-                let (to_audio_producer, mut to_audio_consumer) = rtrb::RingBuffer::new(1);
-                let (mut to_ui_producer, to_ui_consumer) = rtrb::RingBuffer::new(1);
-
-                // Store these so we can communicate with the audio thread.
-                self.state_vector_producer = to_audio_producer;
-                self.state_vector_consumer = to_ui_consumer;
-
-                // Create some state vector storage to pass back and forth.
-                self.state_vector_producer
-                    .push(self.simulation_state.clone())
-                    .unwrap();
-
-                // Send audio generator functor to audio player
-                let mut audio_player_ref = self.audio_player.lock();
-                if audio_player_ref.is_none() {
-                    *audio_player_ref = Some(AudioPlayer::new());
-                }
-                if let Some(Ok(player)) = audio_player_ref.as_mut() {
-                    puffin::profile_scope!("create sampling function");
-                    let sample_rate = player.config.sample_rate().0 as f64;
-                    let exp_a_audio_step = {
-                        puffin::profile_scope!("exp(mat_a / sample_rate)");
-                        (mat_a / sample_rate).exp()
-                    };
-
-                    // Keep a history of states in a circular buffer so that we can create a waveform by combining contributions over time.
-                    const SAMPLES_IN_BUFFER: usize = 1024;
-                    const SPEED_OF_SOUND: f64 = 343.0;
-                    let num_points = self.points.len();
-                    let meters_per_sample = SPEED_OF_SOUND / sample_rate;
-                    let mut state_history = self
-                        .simulation_state
-                        .clone()
-                        .resize_horizontally(SAMPLES_IN_BUFFER, 0.0);
-                    let mut index_of_newest: usize = 0;
-                    let mut num_samples_recorded: usize = 1;
-                    let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
-                        // Advance the simulation and record history
-                        if update_state {
-                            let read_index = index_of_newest;
-                            let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
-                            let (y, mut y_next) =
-                                state_history.columns_range_pair_mut(read_index, write_index);
-                            y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
-                            index_of_newest = write_index;
-                            num_samples_recorded = SAMPLES_IN_BUFFER.min(num_samples_recorded + 1);
-                        }
-
-                        // Traverse history to find the waves that are contributing to what the listener should be hearing right now.
-                        let mut value = 0.0;
-                        for point_index in 0..num_points {
-                            let point_pos_loc = point_index * D;
-                            let point_vel_loc = num_points * D + point_index * D;
-
-                            for i in 2..num_samples_recorded {
-                                let read_index =
-                                    (index_of_newest + SAMPLES_IN_BUFFER - i) % SAMPLES_IN_BUFFER;
-                                let y = &state_history.column(read_index);
-                                let relative_position = Vector2::new(
-                                    y[point_pos_loc] - listener_pos[0],
-                                    y[point_pos_loc + 1] - listener_pos[1],
-                                );
-                                let distance_by_time = i as f64 * meters_per_sample;
-                                let distance_by_state = relative_position.norm();
-                                if distance_by_state < distance_by_time {
-                                    let read_index_prev = (read_index + 1) % SAMPLES_IN_BUFFER;
-                                    let read_index_prev_prev = (read_index + 2) % SAMPLES_IN_BUFFER;
-                                    let y_prev = &state_history.column(read_index_prev);
-                                    let y_prev_prev = &state_history.column(read_index_prev_prev);
-                                    let relative_position_prev = Vector2::new(
-                                        y_prev[point_pos_loc] - listener_pos[0],
-                                        y_prev[point_pos_loc + 1] - listener_pos[1],
-                                    );
-                                    let distance_by_state_prev = relative_position_prev.norm();
-                                    let t = (distance_by_time - distance_by_state)
-                                        / (distance_by_state_prev - distance_by_state
-                                            + meters_per_sample);
-
-                                    let acc_prev = Vector2::new(
-                                        y_prev[point_vel_loc] - y_prev_prev[point_vel_loc],
-                                        y_prev[point_vel_loc + 1] - y_prev_prev[point_vel_loc + 1],
-                                    );
-                                    let acc = Vector2::new(
-                                        y[point_vel_loc] - y_prev[point_vel_loc],
-                                        y[point_vel_loc + 1] - y_prev[point_vel_loc + 1],
-                                    );
-                                    let interpolated_relative_position = relative_position
-                                        + t * (relative_position_prev - relative_position);
-                                    let interpolated_acc = acc + t * (acc_prev - acc);
-                                    let direction = interpolated_relative_position.normalize();
-                                    value += interpolated_acc.dot(&direction)
-                                        / interpolated_relative_position.norm_squared();
-                                    break;
-                                }
-                            }
-                        }
-                        if !to_ui_producer.is_full() {
-                            if let Ok(mut state_storage) = to_audio_consumer.pop() {
-                                // Put an up to date state vector in the provided storage and send it back.
-                                state_storage.set_column(0, &state_history.column(index_of_newest));
-                                to_ui_producer.push(state_storage).unwrap();
-                            }
-                        }
-                        value as f32
-                    };
-
-                    player.set_listener_pos(self.listener_pos).unwrap();
-                    player.play_audio(Box::new(next_sample)).unwrap();
-                }
+                self.start_simulation();
             }
 
             if let Some(Ok(player)) = self.audio_player.lock().as_mut() {
@@ -511,6 +374,127 @@ impl epi::App for StiffPhysicsApp {
                 ui.label("You can turn on resizing and scrolling if you like.");
                 ui.label("You would normally chose either panels OR windows.");
             });
+        }
+    }
+}
+
+impl StiffPhysicsApp {
+    fn start_simulation(&mut self) {
+        puffin::profile_function!();
+        let point_masses = [self.point_mass as f64].repeat(self.points.len());
+        let y0 = new_state_vector_from_points(&self.relaxed_points);
+        let mat_a = create_diff_eq_system_around_y0(&y0, &point_masses, &self.springs);
+        self.simulation_state = new_state_vector_from_points(&self.points);
+        {
+            puffin::profile_scope!("exp_a_sim_step");
+            self.exp_a_sim_step = (mat_a.clone() * 0.01).exp();
+        }
+        {
+            puffin::profile_scope!("exp_a_audio_step");
+            self.exp_a_audio_step = (mat_a.clone() / 44100.0).exp();
+        }
+        self.enable_simulation = true;
+        let (to_audio_producer, mut to_audio_consumer) = rtrb::RingBuffer::new(1);
+        let (mut to_ui_producer, to_ui_consumer) = rtrb::RingBuffer::new(1);
+        self.state_vector_producer = to_audio_producer;
+        self.state_vector_consumer = to_ui_consumer;
+        self.state_vector_producer
+            .push(self.simulation_state.clone())
+            .unwrap();
+        let mut audio_player_ref = self.audio_player.lock();
+        if audio_player_ref.is_none() {
+            *audio_player_ref = Some(AudioPlayer::new());
+        }
+        if let Some(Ok(player)) = audio_player_ref.as_mut() {
+            puffin::profile_scope!("create sampling function");
+            let sample_rate = player.config.sample_rate().0 as f64;
+            let exp_a_audio_step = {
+                puffin::profile_scope!("exp(mat_a / sample_rate)");
+                (mat_a / sample_rate).exp()
+            };
+
+            // Keep a history of states in a circular buffer so that we can create a waveform by combining contributions over time.
+            const SAMPLES_IN_BUFFER: usize = 1024;
+            const SPEED_OF_SOUND: f64 = 343.0;
+            let num_points = self.points.len();
+            let meters_per_sample = SPEED_OF_SOUND / sample_rate;
+            let mut state_history = self
+                .simulation_state
+                .clone()
+                .resize_horizontally(SAMPLES_IN_BUFFER, 0.0);
+            let mut index_of_newest: usize = 0;
+            let mut num_samples_recorded: usize = 1;
+            let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
+                // Advance the simulation and record history
+                if update_state {
+                    let read_index = index_of_newest;
+                    let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
+                    let (y, mut y_next) =
+                        state_history.columns_range_pair_mut(read_index, write_index);
+                    y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
+                    index_of_newest = write_index;
+                    num_samples_recorded = SAMPLES_IN_BUFFER.min(num_samples_recorded + 1);
+                }
+
+                // Traverse history to find the waves that are contributing to what the listener should be hearing right now.
+                let mut value = 0.0;
+                for point_index in 0..num_points {
+                    let point_pos_loc = point_index * D;
+                    let point_vel_loc = num_points * D + point_index * D;
+
+                    for i in 2..num_samples_recorded {
+                        let read_index =
+                            (index_of_newest + SAMPLES_IN_BUFFER - i) % SAMPLES_IN_BUFFER;
+                        let y = &state_history.column(read_index);
+                        let relative_position = Vector2::new(
+                            y[point_pos_loc] - listener_pos[0],
+                            y[point_pos_loc + 1] - listener_pos[1],
+                        );
+                        let distance_by_time = i as f64 * meters_per_sample;
+                        let distance_by_state = relative_position.norm();
+                        if distance_by_state < distance_by_time {
+                            let read_index_prev = (read_index + 1) % SAMPLES_IN_BUFFER;
+                            let read_index_prev_prev = (read_index + 2) % SAMPLES_IN_BUFFER;
+                            let y_prev = &state_history.column(read_index_prev);
+                            let y_prev_prev = &state_history.column(read_index_prev_prev);
+                            let relative_position_prev = Vector2::new(
+                                y_prev[point_pos_loc] - listener_pos[0],
+                                y_prev[point_pos_loc + 1] - listener_pos[1],
+                            );
+                            let distance_by_state_prev = relative_position_prev.norm();
+                            let t = (distance_by_time - distance_by_state)
+                                / (distance_by_state_prev - distance_by_state + meters_per_sample);
+
+                            let acc_prev = Vector2::new(
+                                y_prev[point_vel_loc] - y_prev_prev[point_vel_loc],
+                                y_prev[point_vel_loc + 1] - y_prev_prev[point_vel_loc + 1],
+                            );
+                            let acc = Vector2::new(
+                                y[point_vel_loc] - y_prev[point_vel_loc],
+                                y[point_vel_loc + 1] - y_prev[point_vel_loc + 1],
+                            );
+                            let interpolated_relative_position = relative_position
+                                + t * (relative_position_prev - relative_position);
+                            let interpolated_acc = acc + t * (acc_prev - acc);
+                            let direction = interpolated_relative_position.normalize();
+                            value += interpolated_acc.dot(&direction)
+                                / interpolated_relative_position.norm_squared();
+                            break;
+                        }
+                    }
+                }
+                if !to_ui_producer.is_full() {
+                    if let Ok(mut state_storage) = to_audio_consumer.pop() {
+                        // Put an up to date state vector in the provided storage and send it back.
+                        state_storage.set_column(0, &state_history.column(index_of_newest));
+                        to_ui_producer.push(state_storage).unwrap();
+                    }
+                }
+                value as f32
+            };
+
+            player.set_listener_pos(self.listener_pos).unwrap();
+            player.play_audio(Box::new(next_sample)).unwrap();
         }
     }
 }

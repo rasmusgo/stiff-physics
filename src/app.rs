@@ -452,7 +452,20 @@ impl StiffPhysicsApp {
                     let point_pos_loc = point_index * D;
                     let point_vel_loc = num_points * D + point_index * D;
 
-                    for i in 2..num_samples_recorded {
+                    // Use latest sample to guess how far back in time we need to go
+                    let mut i = {
+                        let y = &state_history.column(index_of_newest);
+                        let relative_position = Vector2::new(
+                            y[point_pos_loc] - listener_pos[0],
+                            y[point_pos_loc + 1] - listener_pos[1],
+                        );
+                        let distance_by_state = relative_position.norm();
+                        let guess_i = (distance_by_state / meters_per_sample).ceil() as usize;
+                        guess_i.max(2).min(num_samples_recorded - 1)
+                    };
+
+                    loop {
+                        // Sample from back in time
                         let read_index =
                             (index_of_newest + SAMPLES_IN_BUFFER - i) % SAMPLES_IN_BUFFER;
                         let y = &state_history.column(read_index);
@@ -462,38 +475,62 @@ impl StiffPhysicsApp {
                         );
                         let distance_by_time = i as f64 * meters_per_sample;
                         let distance_by_time_squared = distance_by_time * distance_by_time;
-
                         let distance_by_state_squared = relative_position.norm_squared();
-                        if distance_by_state_squared < distance_by_time_squared {
-                            let read_index_prev = (read_index + 1) % SAMPLES_IN_BUFFER;
-                            let read_index_prev_prev = (read_index + 2) % SAMPLES_IN_BUFFER;
-                            let y_prev = &state_history.column(read_index_prev);
-                            let y_prev_prev = &state_history.column(read_index_prev_prev);
-                            let relative_position_prev = Vector2::new(
-                                y_prev[point_pos_loc] - listener_pos[0],
-                                y_prev[point_pos_loc + 1] - listener_pos[1],
-                            );
-                            let distance_by_state = distance_by_state_squared.sqrt();
-                            let distance_by_state_prev = relative_position_prev.norm();
-                            let t = (distance_by_time - distance_by_state)
-                                / (distance_by_state_prev - distance_by_state + meters_per_sample);
 
-                            let acc_prev = Vector2::new(
-                                y_prev[point_vel_loc] - y_prev_prev[point_vel_loc],
-                                y_prev[point_vel_loc + 1] - y_prev_prev[point_vel_loc + 1],
-                            );
-                            let acc = Vector2::new(
-                                y[point_vel_loc] - y_prev[point_vel_loc],
-                                y[point_vel_loc + 1] - y_prev[point_vel_loc + 1],
-                            );
-                            let interpolated_relative_position = relative_position
-                                + t * (relative_position_prev - relative_position);
-                            let interpolated_acc = acc + t * (acc_prev - acc);
-                            let direction = interpolated_relative_position.normalize();
-                            value += interpolated_acc.dot(&direction)
-                                / interpolated_relative_position.norm_squared();
-                            break;
+                        // Do we need to go further back in time?
+                        if distance_by_time_squared < distance_by_state_squared {
+                            i += 1;
+                            if i >= num_samples_recorded {
+                                break;
+                            }
+                            continue;
                         }
+
+                        // Sample from slightly less far back in time
+                        let read_index_prev = (read_index + 1) % SAMPLES_IN_BUFFER;
+                        let y_prev = &state_history.column(read_index_prev);
+                        let relative_position_prev = Vector2::new(
+                            y_prev[point_pos_loc] - listener_pos[0],
+                            y_prev[point_pos_loc + 1] - listener_pos[1],
+                        );
+                        let distance_by_time_prev = (i - 1) as f64 * meters_per_sample;
+                        let distance_by_time_prev_squared =
+                            distance_by_time_prev * distance_by_time_prev;
+                        let distance_by_state_prev_squared = relative_position_prev.norm_squared();
+
+                        // Do we need to go forwards in time?
+                        if distance_by_time_prev_squared > distance_by_state_prev_squared {
+                            i -= 1;
+                            if i < 2 {
+                                break;
+                            }
+                            continue;
+                        }
+
+                        // We should now have a sample before and after the information horizon.
+                        // Interpolate between these to find the value at the horizon.
+                        let distance_by_state = distance_by_state_squared.sqrt();
+                        let distance_by_state_prev = distance_by_state_prev_squared.sqrt();
+                        let t = (distance_by_time - distance_by_state)
+                            / (distance_by_state_prev - distance_by_state + meters_per_sample);
+
+                        let read_index_prev_prev = (read_index + 2) % SAMPLES_IN_BUFFER;
+                        let y_prev_prev = &state_history.column(read_index_prev_prev);
+                        let acc_prev = Vector2::new(
+                            y_prev[point_vel_loc] - y_prev_prev[point_vel_loc],
+                            y_prev[point_vel_loc + 1] - y_prev_prev[point_vel_loc + 1],
+                        );
+                        let acc = Vector2::new(
+                            y[point_vel_loc] - y_prev[point_vel_loc],
+                            y[point_vel_loc + 1] - y_prev[point_vel_loc + 1],
+                        );
+                        let interpolated_relative_position =
+                            relative_position + t * (relative_position_prev - relative_position);
+                        let interpolated_acc = acc + t * (acc_prev - acc);
+                        let direction = interpolated_relative_position.normalize();
+                        value += interpolated_acc.dot(&direction)
+                            / interpolated_relative_position.norm_squared();
+                        break;
                     }
                 }
                 value as f32

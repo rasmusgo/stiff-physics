@@ -131,6 +131,7 @@ impl epi::App for StiffPhysicsApp {
     fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
         puffin::profile_function!();
         puffin::GlobalProfiler::lock().new_frame();
+        #[cfg(feature = "profiler")]
         if puffin::are_scopes_on() && !puffin_egui::profiler_window(ctx) {
             puffin::set_scopes_on(false);
         }
@@ -165,7 +166,7 @@ impl epi::App for StiffPhysicsApp {
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
             ui.heading("Side Panel");
 
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(feature = "profiler")]
             if ui.button("Start profiler").clicked() {
                 puffin::set_scopes_on(true);
             }

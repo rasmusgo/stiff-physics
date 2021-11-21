@@ -16,7 +16,7 @@ eframe = "0.15.0" # Gives us egui, epi and web+native backends
 hyperdual = "0.5.0"
 nalgebra = "0.29"
 puffin = "0.12.1"
-puffin_egui = "0.11.0"
+puffin_egui = { version = "0.11.0", optional = true }
 rtrb = "0.2.0"
 serde = { version = "1", features = ["derive"], optional = true }
 
@@ -26,6 +26,7 @@ web-sys = { version = "0.3.55", features = ["EventTarget"] }
 [features]
 default = []
 persistence = ["eframe/persistence", "serde"] # Enable if you want to persist app state on shutdown
+profiler = ["puffin_egui"] # Enable if you want to persist app state on shutdown
 
 [profile.dev]
 opt-level = 2 # To make dissasembly closer to release

@@ -39,9 +39,11 @@ const SPRINGS: [Spring; 3] = [
     },
 ];
 
+#[derive(Clone, Copy)]
 enum GrabbedPoint {
     None,
     PointMass(usize),
+    SimulatedPoint(usize),
     Listener,
 }
 
@@ -61,6 +63,7 @@ pub struct StiffPhysicsApp {
     audio_history_resolution: usize,
     state_vector_producer: rtrb::Producer<DVector<f64>>,
     state_vector_consumer: rtrb::Consumer<DVector<f64>>,
+    mouse_event_producer: rtrb::Producer<(f64, f64, GrabbedPoint)>,
     grabbed_point: GrabbedPoint,
 }
 
@@ -86,6 +89,7 @@ impl Default for StiffPhysicsApp {
 
         // Dummy short-circuit producer/consumer
         let (state_vector_producer, state_vector_consumer) = rtrb::RingBuffer::new(1);
+        let (mouse_event_producer, _) = rtrb::RingBuffer::new(1);
 
         Self {
             listener_pos,
@@ -103,6 +107,7 @@ impl Default for StiffPhysicsApp {
             audio_history_resolution: 1000,
             state_vector_producer,
             state_vector_consumer,
+            mouse_event_producer,
             grabbed_point: GrabbedPoint::None,
         }
     }
@@ -303,6 +308,18 @@ impl epi::App for StiffPhysicsApp {
                             *grabbed_point = id;
                         }
                     };
+                    if self.enable_simulation {
+                        let num_simulated_points = self.simulation_state.len() / 4;
+                        for i in 0..num_simulated_points {
+                            test_point(
+                                &Point2::new(
+                                    self.simulation_state[i * D],
+                                    self.simulation_state[i * D + 1],
+                                ),
+                                GrabbedPoint::SimulatedPoint(i),
+                            );
+                        }
+                    }
                     for (i, p) in self.points.iter().enumerate() {
                         test_point(p, GrabbedPoint::PointMass(i));
                     }
@@ -311,21 +328,23 @@ impl epi::App for StiffPhysicsApp {
                 if response.drag_released() {
                     self.grabbed_point = GrabbedPoint::None;
                 }
+                let p = (pos - c) / r;
                 match self.grabbed_point {
                     GrabbedPoint::PointMass(i) => {
-                        let p = (pos - c) / r;
                         self.points[i].x = p.x as f64;
                         self.points[i].y = p.y as f64;
                     }
                     GrabbedPoint::Listener => {
-                        let p = (pos - c) / r;
                         self.listener_pos.x = p.x as f64;
                         self.listener_pos.y = p.y as f64;
                         if let Some(Ok(player)) = self.audio_player.lock().as_mut() {
                             player.set_listener_pos(self.listener_pos).unwrap();
                         }
                     }
-                    GrabbedPoint::None => (),
+                    _ => self
+                        .mouse_event_producer
+                        .push((p.x as f64, p.y as f64, self.grabbed_point))
+                        .unwrap_or_default(),
                 }
             }
             if self.enable_simulation {
@@ -415,6 +434,16 @@ impl StiffPhysicsApp {
                 (mat_a / sample_rate).exp()
             };
 
+            // Channel for mouse events coming from the UI thread
+            let (mouse_event_producer, mut mouse_event_consumer) = rtrb::RingBuffer::new(100);
+            self.mouse_event_producer = mouse_event_producer;
+            // Get smooth acceleration of mouse by doing moving average twice.
+            const MOUSE_SMOOTHING_ALPHA: f64 = 0.001;
+            let mut mouse_state = GrabbedPoint::None;
+            let mut mouse_target1 = Point2::new(0.0, 0.0);
+            let mut mouse_target2 = Point2::new(0.0, 0.0);
+            let mut mouse_pos = Point2::new(0.0, 0.0);
+
             // Keep a history of states in a circular buffer so that we can create a waveform by combining contributions over time.
             const SAMPLES_IN_BUFFER: usize = 1024;
             const SPEED_OF_SOUND: f64 = 343.0;
@@ -427,17 +456,46 @@ impl StiffPhysicsApp {
             let mut index_of_newest: usize = 0;
             let mut num_samples_recorded: usize = 1;
             let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
-                // Advance the simulation and record history
                 if update_state {
-                    puffin::profile_scope!("update_state");
-                    let read_index = index_of_newest;
-                    let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
-                    let (y, mut y_next) =
-                        state_history.columns_range_pair_mut(read_index, write_index);
-                    y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
-                    index_of_newest = write_index;
-                    num_samples_recorded = SAMPLES_IN_BUFFER.min(num_samples_recorded + 1);
-
+                    let mouse_vel;
+                    {
+                        // Update mouse position and velocity
+                        puffin::profile_scope!("update_mouse");
+                        while let Some(event) = mouse_event_consumer.pop().ok() {
+                            mouse_target1[0] = event.0;
+                            mouse_target1[1] = event.1;
+                            if let GrabbedPoint::None = mouse_state {
+                                mouse_target2 = mouse_target1;
+                                mouse_pos = mouse_target1;
+                            }
+                            mouse_state = event.2;
+                        }
+                        mouse_target2.coords = mouse_target1.coords * MOUSE_SMOOTHING_ALPHA
+                            + mouse_target2.coords * (1.0 - MOUSE_SMOOTHING_ALPHA);
+                        mouse_vel =
+                            (mouse_target2 - mouse_pos) * MOUSE_SMOOTHING_ALPHA * sample_rate;
+                        mouse_pos.coords = mouse_target2.coords * MOUSE_SMOOTHING_ALPHA
+                            + mouse_pos.coords * (1.0 - MOUSE_SMOOTHING_ALPHA);
+                    }
+                    {
+                        // Advance the simulation and record history
+                        puffin::profile_scope!("update_state");
+                        let read_index = index_of_newest;
+                        let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
+                        let (y, mut y_next) =
+                            state_history.columns_range_pair_mut(read_index, write_index);
+                        y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
+                        if let GrabbedPoint::SimulatedPoint(point_index) = mouse_state {
+                            let point_pos_loc = point_index * D;
+                            let point_vel_loc = num_points * D + point_index * D;
+                            y_next[point_pos_loc] = mouse_pos[0];
+                            y_next[point_pos_loc + 1] = mouse_pos[1];
+                            y_next[point_vel_loc] = mouse_vel[0];
+                            y_next[point_vel_loc + 1] = mouse_vel[1];
+                        }
+                        index_of_newest = write_index;
+                        num_samples_recorded = SAMPLES_IN_BUFFER.min(num_samples_recorded + 1);
+                    }
                     if !to_ui_producer.is_full() {
                         puffin::profile_scope!("Send state to UI");
                         if let Ok(mut state_storage) = to_audio_consumer.pop() {

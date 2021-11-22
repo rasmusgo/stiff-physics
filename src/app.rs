@@ -164,7 +164,7 @@ impl epi::App for StiffPhysicsApp {
         }
 
         egui::SidePanel::left("side_panel").show(ctx, |ui| {
-            ui.heading("Side Panel");
+            ui.heading("Settings");
 
             #[cfg(feature = "profiler")]
             if ui.button("Start profiler").clicked() {
@@ -203,6 +203,8 @@ impl epi::App for StiffPhysicsApp {
             }
 
             if let Some(Ok(player)) = self.audio_player.lock().as_mut() {
+                ui.heading("Audio");
+
                 let mut enable_band_pass_filter =
                     player.enable_band_pass_filter.load(Ordering::Relaxed);
                 if ui
@@ -279,7 +281,7 @@ impl epi::App for StiffPhysicsApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             // The central panel the region left after adding TopPanel's and SidePanel's
 
-            ui.heading("Stiff physics");
+            ui.heading("Simulation");
 
             let size = vec2(ui.available_width(), ui.available_width());
             let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());

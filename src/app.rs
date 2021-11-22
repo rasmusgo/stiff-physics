@@ -429,7 +429,7 @@ impl StiffPhysicsApp {
             let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
                 // Advance the simulation and record history
                 if update_state {
-                    puffin::profile_scope!("Update state");
+                    puffin::profile_scope!("update_state");
                     let read_index = index_of_newest;
                     let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
                     let (y, mut y_next) =
@@ -449,6 +449,7 @@ impl StiffPhysicsApp {
                 }
 
                 // Traverse history to find the waves that are contributing to what the listener should be hearing right now.
+                puffin::profile_scope!("compute_audio_sample");
                 let mut value = 0.0;
                 for point_index in 0..num_points {
                     let point_pos_loc = point_index * D;

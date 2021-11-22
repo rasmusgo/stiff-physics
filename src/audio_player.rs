@@ -236,6 +236,7 @@ where
                             moving_average1[channel] - moving_average2[channel];
                     }
 
+                    puffin::profile_scope!("filter_audio");
                     // Adjust volume jointly over raw samples
                     let raw_tall_puppy = sample_by_channel
                         .iter()

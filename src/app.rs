@@ -8,7 +8,7 @@ use eframe::{
     epi,
 };
 use egui::plot::{Line, Plot, VLine, Value, Values};
-use nalgebra::{self, DMatrix, DVector, Point2, Vector2};
+use nalgebra::{self, DMatrix, DVector, Matrix2, Point2, Vector2};
 
 use crate::{
     audio_player::AudioPlayer,
@@ -422,6 +422,21 @@ impl StiffPhysicsApp {
         self.state_vector_producer
             .push(self.simulation_state.clone())
             .unwrap();
+
+        // Precompute demeaned relaxed points to use for determining rotation during simulation.
+        let relaxed_points_mean = Point2::from(
+            self.relaxed_points
+                .iter()
+                .map(|&p| p.coords)
+                .sum::<Vector2<f64>>()
+                / (self.relaxed_points.len() as f64),
+        );
+        let demeaned_relaxed_points: Vec<Vector2<f64>> = self
+            .relaxed_points
+            .iter()
+            .map(|&p| p - relaxed_points_mean)
+            .collect();
+
         let mut audio_player_ref = self.audio_player.lock();
         if audio_player_ref.is_none() {
             *audio_player_ref = Some(AudioPlayer::new());
@@ -455,6 +470,9 @@ impl StiffPhysicsApp {
                 .resize_horizontally(SAMPLES_IN_BUFFER, 0.0);
             let mut index_of_newest: usize = 0;
             let mut num_samples_recorded: usize = 1;
+            // Storage space for state vectors with rotation undone
+            let mut y_unrot = y0.clone();
+            let mut y_next_unrot = y0;
             let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
                 if update_state {
                     let mouse_vel;
@@ -484,7 +502,38 @@ impl StiffPhysicsApp {
                         let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
                         let (y, mut y_next) =
                             state_history.columns_range_pair_mut(read_index, write_index);
-                        y_next.gemv(1.0, &exp_a_audio_step, &y, 0.0);
+                        // Find rotation compared to relaxed points
+                        let mut points_mean = Vector2::<f64>::zeros();
+                        for point_index in 0..num_points {
+                            let point_pos_loc = point_index * D;
+                            points_mean += y.rows(point_pos_loc, D);
+                        }
+                        points_mean /= num_points as f64;
+                        let mut mat_apq = Matrix2::<f64>::zeros();
+                        for (point_index, demeaned_relaxed_point) in
+                            demeaned_relaxed_points.iter().enumerate()
+                        {
+                            let point_pos_loc = point_index * D;
+                            let p_demeaned = y.rows(point_pos_loc, D) - points_mean;
+                            mat_apq += p_demeaned * demeaned_relaxed_point.transpose();
+                        }
+                        // A_pq = ⅀pqᵀ
+                        // A_pq = UDVᵀ = U(VᵀV)DVᵀ = (UVᵀ)(VDVᵀ) = RS, R = UVᵀ, S = VDVᵀ
+                        let svd = mat_apq.svd(true, true);
+                        let rot = svd.u.unwrap() * svd.v_t.unwrap();
+                        for i in 0..num_points * 2 {
+                            rot.tr_mul_to(
+                                &y.fixed_rows::<D>(i * D),
+                                &mut y_unrot.fixed_rows_mut::<D>(i * D),
+                            );
+                        }
+                        y_next_unrot.gemv(1.0, &exp_a_audio_step, &y_unrot, 0.0);
+                        for i in 0..num_points * 2 {
+                            rot.mul_to(
+                                &y_next_unrot.fixed_rows::<D>(i * D),
+                                &mut y_next.fixed_rows_mut::<D>(i * D),
+                            );
+                        }
                         if let GrabbedPoint::SimulatedPoint(point_index) = mouse_state {
                             let point_pos_loc = point_index * D;
                             let point_vel_loc = num_points * D + point_index * D;

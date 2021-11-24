@@ -502,38 +502,106 @@ impl StiffPhysicsApp {
                         let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
                         let (y, mut y_next) =
                             state_history.columns_range_pair_mut(read_index, write_index);
+
                         // Find rotation compared to relaxed points
-                        let mut points_mean = Vector2::<f64>::zeros();
+                        let mut mean_pos = Vector2::<f64>::zeros();
+                        let mut mean_vel = Vector2::<f64>::zeros();
                         for point_index in 0..num_points {
                             let point_pos_loc = point_index * D;
-                            points_mean += y.rows(point_pos_loc, D);
+                            let point_vel_loc = num_points * D + point_index * D;
+                            mean_pos += y.fixed_rows::<D>(point_pos_loc);
+                            mean_vel += y.fixed_rows::<D>(point_vel_loc);
                         }
-                        points_mean /= num_points as f64;
+                        mean_pos /= num_points as f64;
+                        mean_vel /= num_points as f64;
                         let mut mat_apq = Matrix2::<f64>::zeros();
-                        for (point_index, demeaned_relaxed_point) in
+                        let mut angular_momentum = 0.0;
+                        let mut angular_inertia = 0.0;
+                        for (point_index, demeaned_relaxed_pos) in
                             demeaned_relaxed_points.iter().enumerate()
                         {
                             let point_pos_loc = point_index * D;
-                            let p_demeaned = y.rows(point_pos_loc, D) - points_mean;
-                            mat_apq += p_demeaned * demeaned_relaxed_point.transpose();
+                            let point_vel_loc = num_points * D + point_index * D;
+                            let demeaned_pos = y.fixed_rows::<D>(point_pos_loc) - mean_pos;
+                            let demeaned_vel = y.fixed_rows::<D>(point_vel_loc) - mean_vel;
+                            mat_apq += demeaned_pos * demeaned_relaxed_pos.transpose();
+                            angular_momentum += demeaned_pos.perp(&demeaned_vel); // The 2D counterpart of a cross product
+                            angular_inertia += demeaned_pos.norm_squared();
                         }
+                        let angular_velocity = angular_momentum / angular_inertia;
+
                         // A_pq = ⅀pqᵀ
                         // A_pq = UDVᵀ = U(VᵀV)DVᵀ = (UVᵀ)(VDVᵀ) = RS, R = UVᵀ, S = VDVᵀ
                         let svd = mat_apq.svd(true, true);
-                        let rot = svd.u.unwrap() * svd.v_t.unwrap();
-                        for i in 0..num_points * 2 {
+                        let mut rot = svd.u.unwrap() * svd.v_t.unwrap();
+                        let rot_direction = if rot.determinant() < 0.0 { -1.0 } else { 1.0 };
+                        if rot.determinant() < 0.0 {
+                            rot.column_mut(svd.singular_values.imin()).neg_mut();
+                        }
+                        for point_index in 0..num_points {
+                            let point_pos_loc = point_index * D;
+                            let point_vel_loc = num_points * D + point_index * D;
                             rot.tr_mul_to(
-                                &y.fixed_rows::<D>(i * D),
-                                &mut y_unrot.fixed_rows_mut::<D>(i * D),
+                                &(y.fixed_rows::<D>(point_pos_loc) - mean_pos),
+                                &mut y_unrot.fixed_rows_mut::<D>(point_pos_loc),
                             );
+                            rot.tr_mul_to(
+                                &(y.fixed_rows::<D>(point_vel_loc) - mean_vel),
+                                &mut y_unrot.fixed_rows_mut::<D>(point_vel_loc),
+                            );
+                            // Remove angular velocity
+                            y_unrot[point_vel_loc] +=
+                                y_unrot[point_pos_loc + 1] * angular_velocity * rot_direction;
+                            y_unrot[point_vel_loc + 1] -=
+                                y_unrot[point_pos_loc] * angular_velocity * rot_direction;
                         }
                         y_next_unrot.gemv(1.0, &exp_a_audio_step, &y_unrot, 0.0);
-                        for i in 0..num_points * 2 {
-                            rot.mul_to(
-                                &y_next_unrot.fixed_rows::<D>(i * D),
-                                &mut y_next.fixed_rows_mut::<D>(i * D),
-                            );
+
+                        // Apply one iteration of angular and linear velocity
+                        rot *= nalgebra::Rotation2::new(angular_velocity / sample_rate);
+                        mean_pos += mean_vel / sample_rate;
+
+                        // Compute new inertia and angular momentum in order to properly conserve angular momentum
+                        let mut angular_momentum2 = 0.0;
+                        let mut angular_inertia2 = 0.0;
+                        for point_index in 0..num_points {
+                            let point_pos_loc = point_index * D;
+                            let point_vel_loc = num_points * D + point_index * D;
+                            let demeaned_pos = y_next_unrot.fixed_rows::<D>(point_pos_loc);
+                            let demeaned_vel = y_next_unrot.fixed_rows::<D>(point_vel_loc);
+                            angular_momentum2 += demeaned_pos.perp(&demeaned_vel); // The 2D counterpart of a cross product
+                            angular_inertia2 += demeaned_pos.norm_squared();
                         }
+                        let angular_velocity_correction =
+                            (angular_momentum - angular_momentum2) / angular_inertia2;
+
+                        for point_index in 0..num_points {
+                            let point_pos_loc = point_index * D;
+                            let point_vel_loc = num_points * D + point_index * D;
+
+                            // Conserve angular momentum
+                            y_next_unrot[point_vel_loc] -=
+                                y_next_unrot[point_pos_loc + 1] * angular_velocity_correction;
+                            y_next_unrot[point_vel_loc + 1] +=
+                                y_next_unrot[point_pos_loc] * angular_velocity_correction;
+
+                            // Apply new rotation
+                            rot.mul_to(
+                                &y_next_unrot.fixed_rows::<D>(point_pos_loc),
+                                &mut y_next.fixed_rows_mut::<D>(point_pos_loc),
+                            );
+                            rot.mul_to(
+                                &y_next_unrot.fixed_rows::<D>(point_vel_loc),
+                                &mut y_next.fixed_rows_mut::<D>(point_vel_loc),
+                            );
+
+                            // Apply new position and conserve linear velocity
+                            for j in 0..D {
+                                y_next[point_pos_loc + j] += mean_pos[j];
+                                y_next[point_vel_loc + j] += mean_vel[j];
+                            }
+                        }
+
                         if let GrabbedPoint::SimulatedPoint(point_index) = mouse_state {
                             let point_pos_loc = point_index * D;
                             let point_vel_loc = num_points * D + point_index * D;

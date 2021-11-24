@@ -39,6 +39,9 @@ const SPRINGS: [Spring; 3] = [
     },
 ];
 
+const MAP_SIZE: f64 = 5.0;
+const MAP_HALF_SIZE: f64 = MAP_SIZE / 2.0;
+
 #[derive(Clone, Copy)]
 enum GrabbedPoint {
     None,
@@ -292,7 +295,7 @@ impl epi::App for StiffPhysicsApp {
             let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
             let rect = response.rect;
             let c = rect.center();
-            let r = rect.width() / 5.0 - 2.5;
+            let r = rect.width() / MAP_SIZE as f32 - MAP_HALF_SIZE as f32;
             let line_width = f32::max(r / 500., 1.0);
 
             if let Some(pos) = response.interact_pointer_pos() {
@@ -619,6 +622,25 @@ impl StiffPhysicsApp {
                             y_next[point_vel_loc] = mouse_vel[0];
                             y_next[point_vel_loc + 1] = mouse_vel[1];
                         }
+                        for point_index in 0..num_points {
+                            let point_pos_loc = point_index * D;
+                            let point_vel_loc = num_points * D + point_index * D;
+                            for j in 0..D {
+                                if y_next[point_pos_loc + j] > MAP_HALF_SIZE {
+                                    y_next[point_pos_loc + j] = MAP_HALF_SIZE;
+                                    if y_next[point_vel_loc + j] > 0.0 {
+                                        y_next[point_vel_loc + j] = 0.0;
+                                    }
+                                }
+                                if y_next[point_pos_loc + j] < -MAP_HALF_SIZE {
+                                    y_next[point_pos_loc + j] = -MAP_HALF_SIZE;
+                                    if y_next[point_vel_loc + j] < 0.0 {
+                                        y_next[point_vel_loc + j] = 0.0;
+                                    }
+                                }
+                            }
+                        }
+
                         index_of_newest = write_index;
                         num_samples_recorded = SAMPLES_IN_BUFFER.min(num_samples_recorded + 1);
                     }

@@ -475,6 +475,11 @@ impl StiffPhysicsApp {
             let mut y_next_unrot = y0;
             let next_sample = move |update_state: bool, listener_pos: Point2<f64>| {
                 if update_state {
+                    puffin::profile_scope!("update_state");
+                    let read_index = index_of_newest;
+                    let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
+                    let (y, mut y_next) =
+                        state_history.columns_range_pair_mut(read_index, write_index);
                     let mouse_vel;
                     {
                         // Update mouse position and velocity
@@ -483,8 +488,16 @@ impl StiffPhysicsApp {
                             mouse_target1[0] = event.0;
                             mouse_target1[1] = event.1;
                             if let GrabbedPoint::None = mouse_state {
-                                mouse_target2 = mouse_target1;
-                                mouse_pos = mouse_target1;
+                                if let GrabbedPoint::SimulatedPoint(point_index) = event.2 {
+                                    let point_pos_loc = point_index * D;
+                                    let point_pos =
+                                        Point2::from(y.fixed_rows::<D>(point_pos_loc).xy());
+                                    mouse_target2 = point_pos;
+                                    mouse_pos = point_pos;
+                                } else {
+                                    mouse_target2 = mouse_target1;
+                                    mouse_pos = mouse_target1;
+                                }
                             }
                             mouse_state = event.2;
                         }
@@ -497,11 +510,7 @@ impl StiffPhysicsApp {
                     }
                     {
                         // Advance the simulation and record history
-                        puffin::profile_scope!("update_state");
-                        let read_index = index_of_newest;
-                        let write_index = (index_of_newest + 1) % SAMPLES_IN_BUFFER;
-                        let (y, mut y_next) =
-                            state_history.columns_range_pair_mut(read_index, write_index);
+                        puffin::profile_scope!("advance_simulation");
 
                         // Find rotation compared to relaxed points
                         let mut mean_pos = Vector2::<f64>::zeros();

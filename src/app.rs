@@ -471,6 +471,7 @@ impl StiffPhysicsApp {
                 .simulation_state
                 .clone()
                 .resize_horizontally(SAMPLES_IN_BUFFER, 0.0);
+            let mut acc_history = DMatrix::<f64>::zeros(num_points * D, SAMPLES_IN_BUFFER);
             let mut index_of_newest: usize = 0;
             let mut num_samples_recorded: usize = 1;
             // Storage space for state vectors with rotation undone
@@ -614,6 +615,14 @@ impl StiffPhysicsApp {
                             }
                         }
 
+                        // Compute acceleration before collision detection to avoid strong clicks.
+                        acc_history.set_column(
+                            write_index,
+                            &(sample_rate
+                                * (y_next.rows(num_points * D, num_points * D)
+                                    - y.rows(num_points * D, num_points * D))),
+                        );
+
                         if let GrabbedPoint::SimulatedPoint(point_index) = mouse_state {
                             let point_pos_loc = point_index * D;
                             let point_vel_loc = num_points * D + point_index * D;
@@ -659,7 +668,6 @@ impl StiffPhysicsApp {
                 let mut value = 0.0;
                 for point_index in 0..num_points {
                     let point_pos_loc = point_index * D;
-                    let point_vel_loc = num_points * D + point_index * D;
 
                     // Use latest sample to guess how far back in time we need to go
                     let mut i = {
@@ -696,19 +704,19 @@ impl StiffPhysicsApp {
                         }
 
                         // Sample from slightly less far back in time
-                        let read_index_prev = (read_index + 1) % SAMPLES_IN_BUFFER;
-                        let y_prev = &state_history.column(read_index_prev);
-                        let relative_position_prev = Vector2::new(
-                            y_prev[point_pos_loc] - listener_pos[0],
-                            y_prev[point_pos_loc + 1] - listener_pos[1],
+                        let read_index_next = (read_index + 1) % SAMPLES_IN_BUFFER;
+                        let y_next = &state_history.column(read_index_next);
+                        let relative_position_next = Vector2::new(
+                            y_next[point_pos_loc] - listener_pos[0],
+                            y_next[point_pos_loc + 1] - listener_pos[1],
                         );
-                        let distance_by_time_prev = (i - 1) as f64 * meters_per_sample;
-                        let distance_by_time_prev_squared =
-                            distance_by_time_prev * distance_by_time_prev;
-                        let distance_by_state_prev_squared = relative_position_prev.norm_squared();
+                        let distance_by_time_next = (i - 1) as f64 * meters_per_sample;
+                        let distance_by_time_next_squared =
+                            distance_by_time_next * distance_by_time_next;
+                        let distance_by_state_next_squared = relative_position_next.norm_squared();
 
                         // Do we need to go forwards in time?
-                        if distance_by_time_prev_squared > distance_by_state_prev_squared {
+                        if distance_by_time_next_squared > distance_by_state_next_squared {
                             i -= 1;
                             if i < 2 {
                                 break;
@@ -719,23 +727,16 @@ impl StiffPhysicsApp {
                         // We should now have a sample before and after the information horizon.
                         // Interpolate between these to find the value at the horizon.
                         let distance_by_state = distance_by_state_squared.sqrt();
-                        let distance_by_state_prev = distance_by_state_prev_squared.sqrt();
+                        let distance_by_state_prev = distance_by_state_next_squared.sqrt();
                         let t = (distance_by_time - distance_by_state)
                             / (distance_by_state_prev - distance_by_state + meters_per_sample);
 
-                        let read_index_prev_prev = (read_index + 2) % SAMPLES_IN_BUFFER;
-                        let y_prev_prev = &state_history.column(read_index_prev_prev);
-                        let acc_prev = Vector2::new(
-                            y_prev[point_vel_loc] - y_prev_prev[point_vel_loc],
-                            y_prev[point_vel_loc + 1] - y_prev_prev[point_vel_loc + 1],
-                        );
-                        let acc = Vector2::new(
-                            y[point_vel_loc] - y_prev[point_vel_loc],
-                            y[point_vel_loc + 1] - y_prev[point_vel_loc + 1],
-                        );
+                        let acc_next =
+                            &acc_history.fixed_slice::<2, 1>(point_pos_loc, read_index_next);
+                        let acc = &acc_history.fixed_slice::<2, 1>(point_pos_loc, read_index);
                         let interpolated_relative_position =
-                            relative_position + t * (relative_position_prev - relative_position);
-                        let interpolated_acc = acc + t * (acc_prev - acc);
+                            relative_position + t * (relative_position_next - relative_position);
+                        let interpolated_acc = acc + t * (acc_next - acc);
                         let direction = interpolated_relative_position.normalize();
                         value += interpolated_acc.dot(&direction)
                             / interpolated_relative_position.norm_squared();

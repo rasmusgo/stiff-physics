@@ -169,7 +169,7 @@ where
     const ALPHA2: f32 = 0.001;
     const ALPHA_ATTACK: f32 = 1.0;
     const ALPHA_RELEASE: f32 = 0.0001;
-    const BASELINE: f32 = 0.1;
+    const BASELINE: f32 = 100.0;
     const HEADROOM_FRACTION: f32 = 0.25;
     const HEADROOM_FACTOR: f32 = 1.0 - HEADROOM_FRACTION;
     let mut moving_power_average_filtered = BASELINE;

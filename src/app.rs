@@ -488,7 +488,7 @@ impl StiffPhysicsApp {
                     {
                         // Update mouse position and velocity
                         puffin::profile_scope!("update_mouse");
-                        while let Some(event) = mouse_event_consumer.pop().ok() {
+                        while let Ok(event) = mouse_event_consumer.pop() {
                             mouse_target1[0] = event.0;
                             mouse_target1[1] = event.1;
                             if let GrabbedPoint::None = mouse_state {

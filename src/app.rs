@@ -3,10 +3,7 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 
-use eframe::{
-    egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke},
-    epi,
-};
+use eframe::egui::{self, mutex::Mutex, vec2, Color32, Sense, Stroke};
 use egui::plot::{Line, Plot, VLine, Value, Values};
 use nalgebra::{self, DMatrix, DVector, Matrix2, Point2, Vector2};
 
@@ -94,6 +91,12 @@ impl Default for StiffPhysicsApp {
         let (state_vector_producer, state_vector_consumer) = rtrb::RingBuffer::new(1);
         let (mouse_event_producer, _) = rtrb::RingBuffer::new(1);
 
+        let audio_player: Arc<Mutex<Option<anyhow::Result<AudioPlayer>>>> = Default::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            *audio_player.lock() = Some(AudioPlayer::new());
+        }
+
         Self {
             listener_pos,
             point_mass: 0.1,
@@ -104,7 +107,7 @@ impl Default for StiffPhysicsApp {
             exp_a_sim_step: DMatrix::zeros(system_size, system_size),
             exp_a_audio_step: DMatrix::zeros(system_size, system_size),
             enable_simulation: false,
-            audio_player: Default::default(),
+            audio_player,
             audio_history: Vec::new(),
             audio_history_index: 0,
             audio_history_resolution: 1000,
@@ -116,29 +119,11 @@ impl Default for StiffPhysicsApp {
     }
 }
 
-impl epi::App for StiffPhysicsApp {
-    fn name(&self) -> &str {
-        "Stiff Physics"
-    }
-
-    /// Called once before the first frame.
-    fn setup(
-        &mut self,
-        _ctx: &egui::CtxRef,
-        _frame: &mut epi::Frame<'_>,
-        _storage: Option<&dyn epi::Storage>,
-    ) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            *self.audio_player.lock() = Some(AudioPlayer::new());
-        }
-    }
-
+impl eframe::App for StiffPhysicsApp {
     /// Called each time the UI needs repainting, which may be many times per second.
     /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
-    fn update(&mut self, ctx: &egui::CtxRef, _frame: &mut epi::Frame<'_>) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         puffin::profile_function!();
-        puffin::GlobalProfiler::lock().new_frame();
         #[cfg(feature = "profiler")]
         if puffin::are_scopes_on() && !puffin_egui::profiler_window(ctx) {
             puffin::set_scopes_on(false);
@@ -199,8 +184,7 @@ impl epi::App for StiffPhysicsApp {
             let clicked_simulate = ui
                 .vertical_centered_justified(|ui| {
                     ui.add(
-                        egui::Button::new("\nSimulate\n")
-                            .text_style(egui::TextStyle::Heading)
+                        egui::Button::new(egui::RichText::new("\nSimulate\n").heading())
                             .fill(egui::Color32::GREEN),
                     )
                     .clicked()
@@ -239,37 +223,39 @@ impl epi::App for StiffPhysicsApp {
                     egui::Slider::new(&mut self.audio_history_resolution, 10..=sample_rate)
                         .text("Graph resolution"),
                 );
-                let step = (self.audio_history.len() / self.audio_history_resolution).max(1);
-                let iter = self.audio_history.iter().enumerate().step_by(step);
-                let line_raw =
-                    Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
-                        Value::new((i as f64) / sample_rate as f64, val.0 as f64)
-                    })));
-                let line_filtered =
-                    Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
-                        Value::new((i as f64) / sample_rate as f64, val.1 as f64)
-                    })));
-                let line_power_raw =
-                    Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
-                        Value::new((i as f64) / sample_rate as f64, val.2 as f64)
-                    })));
-                let line_power_filtered =
-                    Line::new(Values::from_values_iter(iter.map(|(i, val)| {
-                        Value::new((i as f64) / sample_rate as f64, val.3 as f64)
-                    })));
-                let vline = VLine::new(self.audio_history_index as f64 / sample_rate as f64);
-                ui.add(
-                    Plot::new("Audio")
-                        .line(line_raw)
-                        .line(line_filtered)
-                        .line(line_power_raw)
-                        .line(line_power_filtered)
-                        .view_aspect(1.0)
-                        .vline(vline)
-                        .include_x(0.0)
-                        .include_x(1.0)
-                        .center_y_axis(true),
-                );
+                Plot::new("Audio")
+                    .view_aspect(1.0)
+                    .include_x(0.0)
+                    .include_x(1.0)
+                    .center_y_axis(true)
+                    .show(ui, |plot_ui| {
+                        let step =
+                            (self.audio_history.len() / self.audio_history_resolution).max(1);
+                        let iter = self.audio_history.iter().enumerate().step_by(step);
+                        let line_raw =
+                            Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
+                                Value::new((i as f64) / sample_rate as f64, val.0 as f64)
+                            })));
+                        let line_filtered =
+                            Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
+                                Value::new((i as f64) / sample_rate as f64, val.1 as f64)
+                            })));
+                        let line_power_raw =
+                            Line::new(Values::from_values_iter(iter.clone().map(|(i, val)| {
+                                Value::new((i as f64) / sample_rate as f64, val.2 as f64)
+                            })));
+                        let line_power_filtered =
+                            Line::new(Values::from_values_iter(iter.map(|(i, val)| {
+                                Value::new((i as f64) / sample_rate as f64, val.3 as f64)
+                            })));
+                        let vline =
+                            VLine::new(self.audio_history_index as f64 / sample_rate as f64);
+                        plot_ui.line(line_raw);
+                        plot_ui.line(line_filtered);
+                        plot_ui.line(line_power_raw);
+                        plot_ui.line(line_power_filtered);
+                        plot_ui.vline(vline);
+                    });
                 let num_samples = player.num_frames_per_callback.load(Ordering::Relaxed);
                 ui.label(format!(
                     "{:?} samples = {:.3} ms = {:.2} hz",
@@ -279,10 +265,14 @@ impl epi::App for StiffPhysicsApp {
                 ));
             }
 
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                ui.add(
-                    egui::Hyperlink::new("https://github.com/emilk/egui/").text("powered by egui"),
-                );
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label("powered by ");
+                    ui.hyperlink_to("egui", "https://github.com/emilk/egui");
+                    ui.label(" and ");
+                    ui.hyperlink_to("eframe", "https://github.com/emilk/egui/tree/master/eframe");
+                });
             });
         });
 
@@ -639,13 +629,13 @@ impl StiffPhysicsApp {
                                     y_next[point_pos_loc + j] = MAP_HALF_SIZE;
                                     if y_next[point_vel_loc + j] > 0.0 {
                                         y_next[point_vel_loc + j] = 0.0;
-                                    }
+                                            }
                                 }
                                 if y_next[point_pos_loc + j] < -MAP_HALF_SIZE {
                                     y_next[point_pos_loc + j] = -MAP_HALF_SIZE;
                                     if y_next[point_vel_loc + j] < 0.0 {
                                         y_next[point_vel_loc + j] = 0.0;
-                                    }
+                                            }
                                 }
                             }
                         }

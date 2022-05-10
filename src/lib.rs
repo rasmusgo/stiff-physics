@@ -29,7 +29,7 @@ use eframe::{
 pub fn start(canvas_id: &str) -> Result<(), JsValue> {
     let app = StiffPhysicsApp::default();
     install_touch_handler(canvas_id, app.audio_player.clone())?;
-    eframe::start_web(canvas_id, Box::new(app))
+    eframe::start_web(canvas_id, Box::new(|_cc| Box::new(app)))
 }
 
 #[cfg(target_arch = "wasm32")]

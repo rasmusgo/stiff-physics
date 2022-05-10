@@ -3,7 +3,7 @@ name = "stiff-physics"
 version = "0.1.0"
 authors = ["Rasmus Brönnegård"]
 license = "MIT OR Apache-2.0"
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,14 +13,14 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 anyhow = "1.0.44"
 cpal = { version = "0.13.4", features = ["wasm-bindgen"] }
-eframe = "0.15.0" # Gives us egui, epi and web+native backends
-hyperdual = "0.5.0"
-nalgebra = "0.29"
-puffin = "0.12.1"
-puffin_egui = { version = "0.11.0", optional = true }
+eframe = "0.18.0" # Gives us egui, epi and web+native backends
+hyperdual = "1.0.0"
+nalgebra = "0.31.0"
+puffin = "0.13.2"
+puffin_egui = { version = "0.15.0", optional = true }
 rtrb = "0.2.0"
 serde = { version = "1", features = ["derive"], optional = true }
-triple_buffer = "5.0.6"
+triple_buffer = "6.0.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3.55", features = ["EventTarget"] }
@@ -28,7 +28,7 @@ web-sys = { version = "0.3.55", features = ["EventTarget"] }
 [features]
 default = []
 persistence = ["eframe/persistence", "serde"] # Enable if you want to persist app state on shutdown
-profiler = ["puffin_egui"] # Enable if you want to persist app state on shutdown
+profiler = ["eframe/puffin", "puffin_egui"] # Enable if you want to profile app with puffin
 
 [profile.dev]
 opt-level = 2 # To make dissasembly closer to release

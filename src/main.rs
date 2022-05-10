@@ -7,5 +7,9 @@
 fn main() {
     let app = stiff_physics::StiffPhysicsApp::default();
     let native_options = eframe::NativeOptions::default();
-    eframe::run_native(Box::new(app), native_options);
+    eframe::run_native(
+        "Stiff Physics",
+        native_options,
+        Box::new(|_cc| Box::new(app)),
+    );
 }
